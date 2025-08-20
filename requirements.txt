@@ -1,0 +1,8 @@
+fastapi==0.111.*
+uvicorn[standard]==0.30.*
+pydantic==2.8.*
+numpy>=1.26,<2.1
+requests==2.32.*
+tiktoken==0.7.*
+orjson==3.10.*
+python-dotenv==1.0.*
