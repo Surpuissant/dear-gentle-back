@@ -849,6 +849,13 @@ def set_snapshot(req: SetSnapshotRequest):
     SNAPSHOTS[req.session_id] = req.snapshot
     return {"ok": True}
 
+
+@app.get("/healthz")
+def healthz():
+    return {
+        "ok": True
+    }
+
 # ----------------------------
 # Notes for the front-end (FYI)
 # ----------------------------
