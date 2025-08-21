@@ -20,6 +20,7 @@ import numpy as np
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Body
 from pydantic import BaseModel, Field
 import logging
 
@@ -884,12 +885,29 @@ def chat(req: ChatRequest):
 
 @app.post("/api/seed/preferences")
 def seed_prefs(req: SeedPrefRequest):
-    """Simple helper to store user preferences (as free-form key/values)."""
+    """
+    Upsert user preferences. If a value is the empty string, delete the key.
+    """
     d = PREFERENCES.setdefault(req.user_id, {})
+    deleted, upserted = 0, 0
     for it in req.items:
-        d[it.key] = it.value
-    return {"ok": True, "count": len(req.items)}
+        val = (it.value or "").strip()
+        if val == "":
+            if it.key in d:
+                del d[it.key]
+                deleted += 1
+        else:
+            d[it.key] = val
+            upserted += 1
+    return {"ok": True, "upserted": upserted, "deleted": deleted}
 
+
+@app.get("/api/preferences")
+def get_preferences(user_id: str):
+    """Return all stored preferences for a user as a list of {key,value}."""
+    prefs = PREFERENCES.get(user_id, {})
+    items = [{"key": k, "value": v} for k, v in prefs.items()]
+    return {"ok": True, "items": items}
 
 @app.post("/api/seed/memories")
 def seed_memories(req: SeedMemoryRequest):
@@ -1106,6 +1124,67 @@ def chat_with_chapters(req: ChatRequest):
 
     # Fallback: regular chat
     return chat(req)
+
+# ----------------------------
+# Instructions management API
+# ----------------------------
+
+@app.get("/api/instructions")
+def list_instructions(user_id: str):
+    """
+    Return user's instruction overrides as an ordered list with indices.
+    Response shape: { ok, items:[{index, rule_key, rule_value, active}] }
+    """
+    lst = INSTRUCTIONS.get(user_id, []) or []
+    items = []
+    for i, ins in enumerate(lst):
+        # pydantic model -> dict; fallback if attributes missing
+        d = ins.dict() if hasattr(ins, "dict") else {
+            "rule_key": getattr(ins, "rule_key", "raw"),
+            "rule_value": getattr(ins, "rule_value", ""),
+            "active": getattr(ins, "active", True),
+        }
+        items.append({
+            "index": i,
+            "rule_key": d.get("rule_key", "raw"),
+            "rule_value": d.get("rule_value", ""),
+            "active": bool(d.get("active", True)),
+        })
+    return {"ok": True, "items": items}
+
+
+
+@app.post("/api/instructions/toggle")
+def toggle_instruction(user_id: str = Body(...), index: int = Body(...), active: bool = Body(...)):
+    """
+    Set active True/False by list index.
+    """
+    lst = INSTRUCTIONS.get(user_id, [])
+    if index < 0 or index >= len(lst):
+        raise HTTPException(status_code=404, detail="instruction index out of range")
+    ins = lst[index]
+    # tolerate missing field
+    try:
+        ins.active = active
+    except Exception:
+        # if it's a plain dict or incompatible, rebuild a dict-ish object
+        setattr(ins, "active", active)
+    return {"ok": True, "index": index, "active": active}
+
+
+@app.delete("/api/instructions")
+def delete_instructions(user_id: str, indexes: List[int] = Body(..., embed=True)):
+    """
+    Delete a list of instruction indices (sorted descending to keep indexes stable).
+    """
+    lst = INSTRUCTIONS.get(user_id, [])
+    if not lst:
+        return {"ok": True, "deleted": 0}
+    to_del = sorted([i for i in indexes if 0 <= i < len(lst)], reverse=True)
+    for i in to_del:
+        lst.pop(i)
+    INSTRUCTIONS[user_id] = lst
+    return {"ok": True, "deleted": len(to_del)}
 
 # ----------------------------
 # Notes for the front-end (FYI)
