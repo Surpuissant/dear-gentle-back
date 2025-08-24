@@ -6,3 +6,4 @@ requests==2.32.*
 tiktoken==0.7.*
 orjson==3.10.*
 python-dotenv==1.0.*
+structlog

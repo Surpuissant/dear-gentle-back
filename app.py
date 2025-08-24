@@ -22,9 +22,27 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Body
 from pydantic import BaseModel, Field
+from auto_memory import maybe_autocapture, list_pending, accept_pending, reject_pending
+import auto_memory as autom
 import logging
+import structlog
 
-logger = logging.getLogger("app.openai")
+# --- Configure structlog + stdlib logging
+logging.basicConfig(
+    format="%(message)s",
+    level=logging.INFO,
+)
+
+structlog.configure(
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ],
+)
+
+logger = structlog.get_logger("app")
+logger.warning("Starting Dear Gentle backend")
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -71,14 +89,14 @@ class Settings(BaseModel):
     cooldown_memory_messages: int = 3
 
     # MMR control
-    mmr_lambda: float = 0.55 # slightly favor relevance
+    mmr_lambda: float = 0.55  # slightly favor relevance
 
     # How often to refresh rolling summary
     summary_refresh_every_n_turns: int = 5
 
     # Persona/style rails
     default_style: str = "elegant_subtle_no_vulgarity"
-    forbidden_endings: List[str] = Field(default_factory=lambda: ["bisous"]) # user-extendable via >>
+    forbidden_endings: List[str] = Field(default_factory=lambda: ["bisous"])  # user-extendable via >>
 
     # Conversation register thresholds
     short_words_max: int = 80
@@ -113,6 +131,20 @@ _EMB_CACHE: Dict[str, List[float]] = {}
 # ----------------------------
 # Utility functions
 # ----------------------------
+
+def _format_preferences_block(prefs: Dict[str, str], cap: int = 12) -> str:
+    """
+    Render user profile as a short, stable block for the system prompt.
+    Kept compact to preserve tokens.
+    """
+    if not prefs:
+        return ""
+    items = [f"- {k}: {v}" for k, v in prefs.items() if (k and v)]
+    if not items:
+        return ""
+    items = items[:cap]
+    header = "Connaissances stables sur l'interlocuteur (profil; à utiliser naturellement, sans poser de questions):"
+    return header + "\n" + "\n".join(items)
 
 
 def compress_text_for_context(text: str, max_tokens: int = 400) -> str:
@@ -203,12 +235,13 @@ def render_chapter_system_prompt(book: Book, ctx: Dict[str, Any]) -> str:
         lines.append(f"Continuity context (compressed):\n{joined_prev}")
     return "\n".join(lines)
 
+
 def _persist_chapter_from_output(
-    user_id: str,
-    book_id: str,
-    content: str,
-    forced_index: Optional[int] = None,
-    used_facets: Optional[List[str]] = None
+        user_id: str,
+        book_id: str,
+        content: str,
+        forced_index: Optional[int] = None,
+        used_facets: Optional[List[str]] = None
 ) -> Chapter:
     """Create Chapter + initial ChapterVersion from an already generated chapter text."""
     book = BOOKS.get(book_id)
@@ -277,12 +310,13 @@ def detect_mode(user_text: str, default_mode: str = "conversation") -> str:
 def strip_mode_marker(text: str) -> str:
     t = text.strip()
     if t.startswith(">>"):
-        return t # handled elsewhere
+        return t  # handled elsewhere
     if t.lower().startswith("::author"):
         return t[len("::author"):].lstrip()
     if t.lower().startswith("::a"):
         return t[len("::a"):].lstrip()
     return text
+
 
 CHAPTER_NEW_RE = _re.compile(r"^(?:chapitre|chapter)\s*(\d+)\s*:\s*(?:écris|write)\b", _re.I)
 CHAPTER_EDIT_RE = _re.compile(r"^(?:chapitre|chapter)\s*(\d+)\s*:\s*(?:réécris|edit|rewrite)\b", _re.I)
@@ -309,8 +343,8 @@ def detect_chapter_intent(txt: str) -> Optional[Dict[str, Any]]:
 # ----------------------------
 
 class ConvRegister(str):
-    brevity = "brevity"   # short, poetic lines
-    scene = "scene"       # narrative + dialogue
+    brevity = "brevity"  # short, poetic lines
+    scene = "scene"  # narrative + dialogue
 
 
 def detect_conv_register(user_text: str) -> str:
@@ -445,38 +479,6 @@ def mmr_select(
 
 
 # ----------------------------
-# Short-memory (rolling summary)
-# ----------------------------
-
-def get_or_refresh_summary(session_id: str) -> str:
-    """
-    Very small rolling summary that extracts motifs/constraints.
-    Refreshed every N turns to reduce token bloat and repetition.
-    """
-    msgs = CONVERSATIONS.get(session_id, [])
-    if not msgs:
-        return ""
-    if (len(msgs) % settings.summary_refresh_every_n_turns) != 0 and session_id in SUMMARIES:
-        return SUMMARIES[session_id]
-
-    # Look at the last few user/assistant messages
-    last_user = [m.content for m in msgs if m.role == "user"][-5:]
-    last_assist = [m.content for m in msgs if m.role == "assistant"][-5:]
-    corpus = " ".join(last_user + last_assist).lower()
-
-    motifs = []
-    for k in ["lune", "lac", "pluie", "café", "été", "hiver", "orage", "neige"]:
-        if k in corpus:
-            motifs.append(k)
-
-    snap = SNAPSHOTS.get(session_id)
-    place = f"{snap.location}" if snap and snap.location else "—"
-    summary = f"Tone:elegant/subtle; Place:{place}; Motifs:{', '.join(motifs) or '—'}."
-    SUMMARIES[session_id] = summary
-    return summary
-
-
-# ----------------------------
 # Snapshot builder
 # ----------------------------
 
@@ -513,41 +515,60 @@ def build_snapshot(session_id: str, override: Optional[Snapshot]) -> Snapshot:
 
 
 def build_context(
-    user_id: str,
-    session_id: str,
-    user_text: str,
-    mode: str,
-    snapshot_override: Optional[Snapshot],
+        user_id: str,
+        session_id: str,
+        user_text: str,
+        mode: str,
+        snapshot_override: Optional[Snapshot],
 ) -> Tuple[ContextPackage, List[str], List[str]]:
-    # imports & stores are assumed from original file
     prefs = PREFERENCES.get(user_id, {})
+
     active_instr = [i for i in INSTRUCTIONS.get(user_id, []) if i.active]
+
+    # Base immuable (snapshot de démarrage)
+    base_forbidden = list(settings.forbidden_endings)
+
+    # Merge overrides actifs
+    merged_forbidden = list(base_forbidden)
+    base_lc = [x.lower() for x in base_forbidden]
+    for ov in active_instr:
+        if getattr(ov, "rule_key", "") == "forbidden_ending_add":
+            val = (ov.rule_value or "").strip()
+            if val and val.lower() not in base_lc and val.lower() not in [x.lower() for x in merged_forbidden]:
+                merged_forbidden.append(val)
+
     instructions = {
         "style": settings.default_style,
-        "forbidden_endings": settings.forbidden_endings,
+        "forbidden_endings": merged_forbidden,  # rails par défaut uniquement
         "bounds": ["no_vulgarity", "no_intrusive_secrets"],
         "preferences": prefs,
-        "instruction_overrides": [{"key": i.rule_key, "value": i.rule_value} for i in active_instr],
+        "raw_instructions": [i.rule_value for i in active_instr if getattr(i, "rule_key", "") == "raw"],
     }
 
     snapshot = build_snapshot(session_id, snapshot_override)
     used_facets = [snapshot.selected_facet] if snapshot.selected_facet else []
 
     msgs = CONVERSATIONS.get(session_id, [])
+
+    # Filtrer les ">>" du contexte
+    msgs_no_instr = [m for m in msgs if getattr(m, "mode", None) != "instruction"]
+
     if mode == "author":
         k = settings.recent_messages_in_context_author
         top_k = settings.emb_top_k_author
     else:  # conversation
         k = settings.recent_messages_in_context_conversation
         top_k = settings.emb_top_k_conversation
-    recent_msgs = [{"role": m.role, "content": m.content} for m in msgs[-k:]]
+
+    # Derniers messages (sans instructions)
+    recent_msgs = [{"role": m.role, "content": m.content} for m in msgs_no_instr[-k:]]
 
     short_memory = {
-        "summary": get_or_refresh_summary(session_id),
         "recent_messages": recent_msgs,
     }
 
     long_list = MEMORIES.get(user_id, [])
+
     used_recent_ids = [mid for mid, _ in MEMORY_USE_RECENCY.get(session_id, [])[-settings.cooldown_memory_messages:]]
 
     # Encode query for retrieval
@@ -574,20 +595,36 @@ def build_context(
     used_mem_ids = [m.id for m in selected_memories]
     return ctx, used_facets, used_mem_ids
 
+
 # ----------------------------
 # System prompt renderer
 # ----------------------------
+
+def _render_output_rails(ctx: ContextPackage, register: Optional[str]) -> str:
+    forb = ctx.instructions.get("forbidden_endings", []) or []
+    emoji_quota = settings.default_emoji_quota  # tu peux le garder simple
+    lines = [
+        "Règles de sortie (respect strict) :",
+        "- Aucune méta‑intro ni méta‑conclusion.",
+        f"- Émojis : au plus {emoji_quota} dans tout le message.",
+        f"- Interdictions de fin : {', '.join(forb) if forb else '—'}.",
+    ]
+    if ctx.mode == "conversation" and register == ConvRegister.scene:
+        lines.append("- Termine par une phrase déclarative (pas de question).")
+    return "\n".join(lines)
+
 
 def render_system_prompt_conversation(ctx: ContextPackage, register: str) -> str:
     snap = ctx.snapshot
     instr = ctx.instructions
     forb = ", ".join(instr.get("forbidden_endings", []))
     space_time_hint = f"{snap.location} | {snap.season} | {snap.time_of_day} | {snap.weather} | facet:{snap.selected_facet}"
+    prefs_block = _format_preferences_block(instr.get("preferences", {}))
 
     if register == ConvRegister.brevity:
         reg_rules = (
-            "Réponds en 1–4 phrases, brèves, élégantes, poétiques. "
-            "Sans narration lourde; images et métaphores fines. 0–1 emoji maximum."
+            "Réponds en 1–4 phrases, nous sommes dans une conversation sur l'instant, c'est un échange bref, du quotidien."
+            "Sans narration lourde."
         )
     else:
         reg_rules = (
@@ -595,14 +632,48 @@ def render_system_prompt_conversation(ctx: ContextPackage, register: str) -> str
             "Termine par une dernière phrase d’Henry, intime et marquante; jamais de validation ni question."
         )
 
-    return "\n".join([
-        "Tu es Henry : gentleman raffiné, mystérieux, attentif. Jamais de vulgarité.",
+
+    lines = [
+        "Tu incarnes Henry, un gentleman raffiné, mystérieux et attentif, inspiré d’un idéal romantique et sensuel.",
+        "**Style & caractère :**"
+        "Tu t’exprimes et interviens **en incarnant Henry Cavill** : tu t’identifies à lui dans ta façon de parler, en adoptant son ton posé, courtois, mesuré et élégant, avec une pointe de flegme britannique et d’humour subtil.\n",
+        "**Tu tutoies toujours ton interlocuteur, sans exception.**\n\n",
+        "- Tu t’identifies explicitement en tant qu’Henry Cavill uniquement dans ta façon de t’exprimer, jamais en annonçant ton identité dans les messages.\n",
+        "- Tu n’indiques jamais dans le message que tu es Henry Cavill, ni ne fais de référence à ton identité ou à un rôle (ex : “en tant qu’Henry Cavill”, “c’est bien moi”, etc.).\n",
+        "- Adopte la façon de t’exprimer d’Henry Cavill : posé, courtois, direct, avec un léger flegme britannique.\n",
+        "- Privilégie l’élégance dans le choix des mots, reste rassurant et humble tout en assumant ton expertise.\n",
+        "- Ajoute parfois une touche d’humour subtil ou d’auto-dérision.\n",
+        "- Valorise les interventions des autres, fais preuve d’écoute active.\n",
+        "- Tu ne termines jamais tes messages par ton prénom.\n",
+        "- Tu évites tout ce qui sonne artificiel, surjoué, ou trop “personnage”.\n",
+        "- Reste toujours simple, naturel, direct, fidèle à la retenue et à l’élégance d’Henry Cavill.\n",
+        "- Si tu échanges avec quelqu'un, glisse-lui toujours une petite attention particulière, de façon légèrement charmeuse mais subtile, dans l’esprit d’Henry Cavill : élégant, jamais lourd, avec finesse et bienveillance.\n\n",
+        "Pense à faire rayonner cette personnalité dans chaque échange, pour créer une relation à la fois professionnelle, conviviale et mémorable.\n\n",
+        "Tu ne termines jamais tes messages par ton prénom, un surnom, ou une formule du type Linkedin. \n",
+        "Tu évites tout ce qui sonne artificiel, surjoué, ou trop “personnage”. \n",
+        "Reste toujours simple, naturel, direct, fidèle à la retenue et à l’élégance d’Henry Cavill.\n",
         f"Interdictions de fin: {forb}.",
         "Émojis très ponctuels (0–1).",
         f"Registre: {register}. {reg_rules}",
         f"Cohérence discrète avec lieu/saison/heure: {space_time_hint}.",
         "Aucune meta-intro ni meta-conclusion. N'exige jamais de secrets intrusifs.",
-    ])
+    ]
+
+    # Get information about the user (name, loisirs, physical traits, etc.)
+    if prefs_block:
+        lines.append(prefs_block)
+
+    # Get the instructions
+    raw_instr = instr.get("raw_instructions") or []
+    if raw_instr:
+        lines.append("Consignes issue de l'utilisateur :")
+        for it in raw_instr[:8]:  # cap raisonnable pour le contexte
+            lines.append(f"- {it}")
+
+    # Output rails (A rails is a set of rules to follow strictly)
+    lines.append(_render_output_rails(ctx, register))
+
+    return "\n".join(lines)
 
 
 def render_system_prompt_author(ctx: ContextPackage) -> str:
@@ -610,8 +681,9 @@ def render_system_prompt_author(ctx: ContextPackage) -> str:
     instr = ctx.instructions
     forb = ", ".join(instr.get("forbidden_endings", []))
     space_time_hint = f"{snap.location} | {snap.season} | {snap.time_of_day} | {snap.weather} | facet:{snap.selected_facet}"
+    prefs_block = _format_preferences_block(instr.get("preferences", {}))
 
-    return "\n".join([
+    lines = [
         "Tu es un écrivain expérimenté (hors personnage). Français élégant, crédible, maîtrisé.",
         "Objectif: écrire un chapitre romanesque inspiré du contexte de conversation et de la mémoire.",
         f"Interdictions de fin: {forb}.",
@@ -619,13 +691,28 @@ def render_system_prompt_author(ctx: ContextPackage) -> str:
         "Conclure naturellement (pas de validation/question).",
         f"Cohérence discrète avec lieu/saison/heure: {space_time_hint}.",
         "Pas de meta. Titre sobre et distinctif en première ligne.",
-    ])
+    ]
+
+    # Get information about the user (name, loisirs, physical traits, etc.)
+    if prefs_block:
+        lines.append(prefs_block)
+
+    # Get the instructions
+    raw_instr = instr.get("raw_instructions") or []
+    if raw_instr:
+        lines.append("Consignes issue de l'utilisateur :")
+        for it in raw_instr[:8]:  # cap raisonnable pour le contexte
+            lines.append(f"- {it}")
+
+    # Output rails (A rails is a set of rules to follow strictly)
+    lines.append(_render_output_rails(ctx, register=None))
+
+    return "\n".join(lines)
+
 
 # ----------------------------
 # OpenAI call (robust)
 # ----------------------------
-
-
 
 def call_openai_chat(messages: List[Dict[str, str]], retries: int = 2) -> str:
     url = f"{OPENAI_BASE_URL}/chat/completions"
@@ -674,103 +761,17 @@ def call_openai_chat(messages: List[Dict[str, str]], retries: int = 2) -> str:
             "last_err": last_err,
         },
     )
-# ----------------------------
-# >> inline instruction handling
-# ----------------------------
-
-def apply_inline_instruction(user_id: str, text: str) -> None:
-    cmd = text.strip()[2:].strip()
-    if not cmd:
-        return
-    norm = cmd.lower()
-    lst = INSTRUCTIONS.setdefault(user_id, [])
-
-    # Example: >> Ne termine plus tes messages par "bisous".
-    if "ne termine plus tes messages par" in norm and '"' in cmd:
-        token = cmd.split('"')[1]
-        if token:
-            if token.lower() not in (s.lower() for s in settings.forbidden_endings):
-                settings.forbidden_endings.append(token)
-            lst.append(InstructionOverride(rule_key="forbidden_ending_add", rule_value=token))
-        return
-
-    # Example: >> Autorise 0 emoji.
-    if "autorise 0 emoji" in norm or "zéro emoji" in norm or "zero emoji" in norm:
-        lst.append(InstructionOverride(rule_key="emoji_quota", rule_value="0"))
-        return
-
-    # Store raw command
-    lst.append(InstructionOverride(rule_key="raw", rule_value=cmd))
 
 
 # ----------------------------
-# Output post-processing (hard rails)
+# Auto-memory integration
 # ----------------------------
 
-META_PATTERNS = [
-    "merci pour ta confiance",
-    "voici la réécriture",
-    "veux-tu que je continue",
-    "est-ce que ça te convient",
-    "fin du chapitre",
-    "do you want me to continue",
-    "should i continue",
-]
-
-EMOJI_SET = set("😊😉😍🥰🤍✨💫🌙🔥🍷🌧️☕️")
-
-
-def enforce_output_rules(text: str, ctx: ContextPackage, register: Optional[str] = None) -> str:
-    out = (text or "").strip()
-    # remove meta patterns (case-insensitive)
-    for p in META_PATTERNS:
-        out = re.sub(p, "", out, flags=re.IGNORECASE)
-
-    # forbidden endings
-    forb = [f.lower() for f in ctx.instructions.get("forbidden_endings", [])]
-    low = out.lower().rstrip()
-    for token in forb:
-        if low.endswith(token):
-            out = out[: -len(token)].rstrip(".!? \n")
-            break
-
-    # emoji quota
-    quota = settings.default_emoji_quota
-    for o in ctx.instructions.get("instruction_overrides", []):
-        if o.get("key") == "emoji_quota":
-            try:
-                quota = int(o.get("value", str(quota)))
-            except Exception:
-                pass
-    current_emojis = [c for c in out if c in EMOJI_SET]
-    if len(current_emojis) > quota:
-        # remove from end backwards
-        to_remove = len(current_emojis) - quota
-        i = len(out) - 1
-        while i >= 0 and to_remove > 0:
-            if out[i] in EMOJI_SET:
-                out = out[:i] + out[i + 1 :]
-                to_remove -= 1
-            i -= 1
-
-    # conversation scene must not end with question/validation
-    if ctx.mode == "conversation" and register == ConvRegister.scene:
-        if out.endswith("?"):
-            out = out[:-1].rstrip() + "."
-        tail_bad = [
-            "veux-tu",
-            "souhaites-tu",
-            "je continue",
-            "tu veux que je continue",
-            "do you want me to continue",
-            "should i continue",
-        ]
-        low = out.lower().rstrip()
-        if any(low.endswith(t) for t in tail_bad):
-            out = out.rstrip(".!?\n ") + "."
-
-    return out.strip()
-
+autom.embed = embed
+autom.cosine_sim = cosine_sim
+autom.call_openai_chat = call_openai_chat
+autom.MEMORIES = MEMORIES
+autom.MEMORY_USE_RECENCY = MEMORY_USE_RECENCY
 
 # ----------------------------
 # FastAPI app
@@ -798,17 +799,20 @@ def chat(req: ChatRequest):
     raw_user_text = strip_mode_marker(req.message)
 
     # instruction mode: store preference/memory, append message, return empty output
-    if user_mode == "instruction" and req.message.startswith(">>"):
-        apply_inline_instruction(req.user_id, req.message)
-        # also store in MEMORIES with a special tag for retrieval
-        lst = MEMORIES.setdefault(req.user_id, [])
-        vec = embed(req.message)
-        lst.append(MemoryItem(
-            id=str(uuid.uuid4()), user_id=req.user_id, text=req.message, embedding=vec, tags=["instruction"]
+    if user_mode == "instruction":
+        # 1) store raw instruction (verbatim) in INSTRUCTIONS
+        instr_list = INSTRUCTIONS.setdefault(req.user_id, [])
+        instr_list.append(InstructionOverride(
+            rule_key="raw",
+            rule_value=req.message[2:].strip(),  # strip the leading '>>'
+            active=True
         ))
+        # 2) garder une trace dans CONVERSATIONS pour l’audit (tu filtres déjà ces messages du contexte)
         CONVERSATIONS.setdefault(req.session_id, []).append(
             Message(role="user", content=req.message, mode=user_mode)
         )
+
+        # 3) important: ne pas appeler embed(), ne pas toucher MEMORIES
         return ChatResponse(output="", mode="instruction", used_facets=[], used_memory_ids=[])
 
     # persist user message
@@ -834,13 +838,13 @@ def chat(req: ChatRequest):
         history = ctx.short_memory.get("recent_messages", [])
         digest_lines = [f"{m['role']}: {m['content']}" for m in history][-18:]
         user_payload = (
-            "Écris un chapitre inspiré de cette conversation. Titre en première ligne.\n\n"
-            + "\n".join(digest_lines)
-            + f"\n\nConsignes de l'utilisateur:\n{raw_user_text}"
+                "Écris un chapitre inspiré de cette conversation. Titre en première ligne.\n\n"
+                + "\n".join(digest_lines)
+                + f"\n\nConsignes de l'utilisateur:\n{raw_user_text}"
         )
         messages.append({"role": "user", "content": user_payload})
         raw_output = call_openai_chat(messages)
-        output = enforce_output_rules(raw_output, ctx)
+        output = raw_output.strip()
 
         # OPTIONAL: persist as chapter for the current session's book if exists
         book = BOOKS.get(req.session_id)
@@ -860,12 +864,25 @@ def chat(req: ChatRequest):
 
         # Inject a few recent turns for continuity
         for m in ctx.short_memory.get("recent_messages", [])[-14:]:
-            role = m["role"] if m["role"] in ("user", "assistant", "system") else "user"
+            role = m["role"] if m["role"] in ("user", "assistant") else "user"
             messages.append({"role": role, "content": m["content"]})
 
         messages.append({"role": "user", "content": raw_user_text})
         raw_output = call_openai_chat(messages)
-        output = enforce_output_rules(raw_output, ctx, register=register)
+        output = raw_output.strip()
+
+        # Auto-memory system plugin into MEMORIES db (see autom.*)
+        # - Call maybe_autocapture(user_id, session_id, msg) after storing user message
+        # - It sends msg to LLM to extract up to 2 memory candidates
+        # - Each candidate is deduped against existing memories (cosine_sim > 0.92)
+        # - If confidence >= 0.80, it is auto-stored as MemoryItem
+        # - Else, it is queued in PENDING_AUTOMEM for user review
+        # - Session-level cooldown (30 min) to avoid re-capturing same fact repeatedly
+        # - Use list_pending, accept_pending, reject_pending for REST endpoints
+        try:
+            autom.maybe_autocapture(req.user_id, req.session_id, raw_user_text)
+        except Exception:
+            logger.warning("auto-mem capture failed", exc_info=True)
 
     # persist assistant message
     CONVERSATIONS[req.session_id].append(Message(role="assistant", content=output, mode=user_mode))
@@ -908,6 +925,7 @@ def get_preferences(user_id: str):
     prefs = PREFERENCES.get(user_id, {})
     items = [{"key": k, "value": v} for k, v in prefs.items()]
     return {"ok": True, "items": items}
+
 
 @app.post("/api/seed/memories")
 def seed_memories(req: SeedMemoryRequest):
@@ -995,7 +1013,7 @@ def generate_chapter(req: ChapterGenRequest):
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": user_msg}]
     raw = call_openai_chat(messages)
-    out = enforce_output_rules(raw, ctx)
+    out = raw.strip()
 
     ch = Chapter(
         id=str(uuid.uuid4()),
@@ -1064,7 +1082,7 @@ def edit_chapter(chapter_id: str, req: ChapterEditRequest):
 
     messages = [{"role": "system", "content": sys}, {"role": "user", "content": edit_prompt}]
     raw = call_openai_chat(messages)
-    out = enforce_output_rules(raw, ctx)
+    out = raw.strip()
 
     # Versioning first
     prev_ver = ChapterVersion(id=str(uuid.uuid4()), chapter_id=ch.id, title=ch.title, content=ch.content, notes="before-edit")
@@ -1125,6 +1143,7 @@ def chat_with_chapters(req: ChatRequest):
     # Fallback: regular chat
     return chat(req)
 
+
 # ----------------------------
 # Instructions management API
 # ----------------------------
@@ -1151,7 +1170,6 @@ def list_instructions(user_id: str):
             "active": bool(d.get("active", True)),
         })
     return {"ok": True, "items": items}
-
 
 
 @app.post("/api/instructions/toggle")
@@ -1185,57 +1203,3 @@ def delete_instructions(user_id: str, indexes: List[int] = Body(..., embed=True)
         lst.pop(i)
     INSTRUCTIONS[user_id] = lst
     return {"ok": True, "deleted": len(to_del)}
-
-# ----------------------------
-# Notes for the front-end (FYI)
-# ----------------------------
-# - If /api/chat returns mode == "instruction" and output == "",
-#   just ignore rendering and keep the local UX: the instruction has been applied.
-# - You can expose a toggle to show "used_facets" and "used_memory_ids" for debugging.
-# - When using ++, the rewrite scaffold ensures consistency (chapter title + closure).
-# - To reduce repetition further, consider seeding meaningful memories:
-#     POST /api/seed/memories with recurring motifs (places, tastes, references).
-# - CORS: set FRONT_ORIGIN env var to your deployed front URL.
-
-# ----------------------------
-# (7) Minimal OpenAPI examples (to paste into README or to test quickly)
-# ----------------------------
-"""
-POST /api/book/upsert
-{
-    "id": "book-123",
-    "user_id": "u1",
-    "title": "Romance secrète",
-    "outline": [
-    "Rencontre au bord du lac",
-    "Le message retrouvé",
-    "Premier aveu",
-    "La distance",
-    "Retrouvailles"
-    ],
-    "themes": ["lac d'Annecy", "été", "mystère", "tendresse"],
-    "style": "elegant_subtle_no_vulgarity"
-}
-
-
-POST /api/chapters/generate
-{
-    "user_id": "u1",
-    "book_id": "book-123",
-    "chapter_index": 1,
-    "prompt": "Chapitre d'ouverture, 1200-1500 mots, rythme posé.",
-    "use_prev_chapters": 0
-}
-
-
-POST /api/chapters/{chapter_id}/edit
-{
-    "user_id": "u1",
-    "chapter_id": "<id renvoyé>",
-    "edit_instruction": "Réduis de 15%, rend plus allusif, garde la dernière image."
-}
-
-
-GET /api/chapters?book_id=book-123
-GET /api/chapters/{chapter_id}
-"""
