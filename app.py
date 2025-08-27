@@ -2,11 +2,9 @@
 # FastAPI backend for "Dear Gentle — Romance secrète"
 # Goals:
 # - Strong compliance with the product spec (Henry's persona and modes)
-# - Real conversational memory that reduces repetition:
-#   * Short-memory: recent turns + compact rolling summary
-#   * Long-memory: vector search (OpenAI embeddings) with MMR + reuse cooldown
+# - Real conversational memory that reduces repetition
 # - Strict post-processing to eliminate meta, forbidden endings, emoji overflow
-# - Proper handling of modes: short, chapter, rewrite (++), instruction (>>)
+# - Proper handling of modes: conversation vs author vs instruction
 # - Europe/Paris time coherence and light space-time hints
 # - Clear, practical comments (English), minimal external deps
 
@@ -15,40 +13,26 @@ import re
 import time
 import uuid
 from typing import List, Dict, Optional, Tuple, Any
-import re as _re
 import numpy as np
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Body
 from pydantic import BaseModel, Field
-from auto_memory import maybe_autocapture, list_pending, accept_pending, reject_pending
 import auto_memory as autom
 import logging
 import structlog
+from style_packs import (get_style_pack, list_style_meta, render_style_template, STYLE_PACKS)
 
 # --- Configure structlog + stdlib logging
-logging.basicConfig(
-    format="%(message)s",
-    level=logging.INFO,
-)
-
-structlog.configure(
-    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.JSONRenderer(),
-    ],
-)
-
+logging.basicConfig(format="%(message)s",level=logging.INFO,)
+structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),processors=[structlog.processors.TimeStamper(fmt="iso"),structlog.processors.JSONRenderer(), ],)
 logger = structlog.get_logger("app")
 logger.warning("Starting Dear Gentle backend")
 
 # Load environment variables
 from dotenv import load_dotenv
 
-from models import Message, Snapshot, InstructionOverride, MemoryItem, ContextPackage, ChatRequest, ChatResponse, SeedPrefRequest, SeedMemoryRequest, SetSnapshotRequest, Book, Chapter, ChapterVersion, \
-    ChapterGenRequest, ChapterEditRequest
+from models import Message, Snapshot, InstructionOverride, MemoryItem, ContextPackage, ChatRequest, ChatResponse, SeedPrefRequest, SeedMemoryRequest, SetSnapshotRequest, Book, Chapter, ChapterVersion, ChapterGenRequest, ChapterEditRequest
 from utils import paris_now, infer_season_from_date, infer_time_of_day, cosine_sim, build_openai_headers
 
 load_dotenv()
@@ -95,8 +79,8 @@ class Settings(BaseModel):
     summary_refresh_every_n_turns: int = 5
 
     # Persona/style rails
-    default_style: str = "elegant_subtle_no_vulgarity"
-    forbidden_endings: List[str] = Field(default_factory=lambda: ["bisous"])  # user-extendable via >>
+    default_style_id: str = "henry"
+    forbidden_endings: List[str] = Field(default_factory=lambda: ["bisous"])
 
     # Conversation register thresholds
     short_words_max: int = 80
@@ -112,17 +96,19 @@ settings = Settings()
 # In-memory stores (replace with DB later)
 # ----------------------------
 
+from stores import USERS # Structured as Dict[str, Dict[str, str]] = {} -> store minimal user info like preferred style pack etc...
+from stores import INSTRUCTIONS # Structured as Dict[str, List[InstructionOverride]] = {}  # user_id -> overrides
 CONVERSATIONS: Dict[str, List[Message]] = {}  # session_id -> [Message]
 SUMMARIES: Dict[str, str] = {}  # session_id -> rolling summary text
 PREFERENCES: Dict[str, Dict[str, str]] = {}  # user_id -> {key:value}
-INSTRUCTIONS: Dict[str, List[InstructionOverride]] = {}  # user_id -> overrides
 MEMORIES: Dict[str, List[MemoryItem]] = {}  # user_id -> [MemoryItem]
 SNAPSHOTS: Dict[str, Snapshot] = {}  # session_id -> Snapshot
 MEMORY_USE_RECENCY: Dict[str, List[Tuple[str, float]]] = {}  # session_id -> [(mem_id, ts), ...]
 BOOKS: Dict[str, Book] = {}
-CHAPTERS: Dict[str, Chapter] = {}
-CHAPTER_VERSIONS: Dict[str, List[ChapterVersion]] = {}
-CHAPTER_EMB: Dict[str, List[float]] = {}  # embedding per chapter content (for later retrieval)
+
+from stores import CHAPTERS # Structured as Dict[str, Chapter] = {} -> store chapters by their ID
+from stores import CHAPTER_EMB # Structured as Dict[str, List[float]] = {}  # embedding per chapter content (for later retrieval)
+from stores import CHAPTER_VERSIONS # Structured as Dict[str, List[ChapterVersion]] = {}
 
 # Embeddings cache to reduce network calls
 _EMB_CACHE: Dict[str, List[float]] = {}
@@ -131,6 +117,17 @@ _EMB_CACHE: Dict[str, List[float]] = {}
 # ----------------------------
 # Utility functions
 # ----------------------------
+
+def get_current_style_id(user_id: str) -> str:
+    sid = USERS.get(user_id, {}).get("style_id")
+    return sid or settings.default_style_id
+
+def _effective_forbidden_endings(ctx: ContextPackage, pack) -> list[str]:
+    # depuis ctx.instructions (tes overrides actifs déjà calculés) + pack
+    base = set(pack.constraints.forbidden_endings or [])
+    instr_forb = set(ctx.instructions.get("forbidden_endings") or [])
+    return sorted(base.union(instr_forb))
+
 
 def _format_preferences_block(prefs: Dict[str, str], cap: int = 12) -> str:
     """
@@ -199,41 +196,8 @@ def build_chapter_context(user_id: str, book: Book, chapter_index: int, use_prev
         "prev_chapters": prev_ctx,
         "long_facts": facts,
         "themes": book.themes,
-        "style_pref": book.style or settings.default_style,
+        "style_pref": book.style,
     }
-
-
-def render_chapter_system_prompt(book: Book, ctx: Dict[str, Any]) -> str:
-    """System prompt specialized for chapter generation/editing; reuses the same rails."""
-    rails = (
-        "You are Henry (refined, mysterious). No vulgarity. No meta. French. "
-        "Subtle emotion, lived details, realistic dialogue. Keep continuity with previous chapters."
-    )
-    rules = (
-        "Write a novel chapter with a distinctive title. Mix narration and dialogues. "
-        "End with a striking last line from Henry, no questions, no validation."
-    )
-    beats = ctx.get("outline_beat", "")
-    neighbors = "; ".join([f"N{idx}:{beat}" for idx, beat in ctx.get("neighbor_beats", [])])
-    themes = ", ".join(ctx.get("themes", []))
-    style = ctx.get("style_pref", settings.default_style)
-
-    lines = [
-        rails,
-        f"Book title: {book.title}",
-        f"Themes: {themes}",
-        f"Style: {style}",
-        f"Current outline beat: {beats}",
-        f"Neighbor beats: {neighbors}",
-        "Use light spatio-temporal hints coherent with Europe/Paris timeframe.",
-        rules,
-    ]
-    if ctx.get("long_facts"):
-        lines.append(f"Author notes to weave subtly: {ctx['long_facts']}")
-    if ctx.get("prev_chapters"):
-        joined_prev = "\n---\n".join(ctx["prev_chapters"])
-        lines.append(f"Continuity context (compressed):\n{joined_prev}")
-    return "\n".join(lines)
 
 
 def _persist_chapter_from_output(
@@ -317,27 +281,6 @@ def strip_mode_marker(text: str) -> str:
         return t[len("::a"):].lstrip()
     return text
 
-
-CHAPTER_NEW_RE = _re.compile(r"^(?:chapitre|chapter)\s*(\d+)\s*:\s*(?:écris|write)\b", _re.I)
-CHAPTER_EDIT_RE = _re.compile(r"^(?:chapitre|chapter)\s*(\d+)\s*:\s*(?:réécris|edit|rewrite)\b", _re.I)
-
-
-def detect_chapter_intent(txt: str) -> Optional[Dict[str, Any]]:
-    """Return {action, index}|None: lightweight convention for chat commands.
-    Examples:
-      - "Chapitre 3: écris une version plus sombre" -> {action:"generate", index:3, note:"une version plus sombre"}
-      - "Chapitre 2: réécris en 1200 mots" -> {action:"edit", index:2, note:"en 1200 mots"}
-    """
-    t = txt.strip()
-    m = CHAPTER_NEW_RE.match(t)
-    if m:
-        return {"action": "generate", "index": int(m.group(1)), "note": t[m.end():].strip()}
-    m = CHAPTER_EDIT_RE.match(t)
-    if m:
-        return {"action": "edit", "index": int(m.group(1)), "note": t[m.end():].strip()}
-    return None
-
-
 # ----------------------------
 # Conversation register detection
 # ----------------------------
@@ -420,62 +363,93 @@ def mark_facets_used(snapshot: Snapshot, session_id: str, used: List[str]) -> Sn
 # Embeddings + MMR selection
 # ----------------------------
 
-def embed(text: str) -> List[float]:
-    """Call OpenAI embeddings with small in-memory cache."""
+def embed(text: str, retries: int = 2, timeout_s: int = 30) -> List[float]:
     if text in _EMB_CACHE:
         return _EMB_CACHE[text]
     url = f"{OPENAI_BASE_URL}/embeddings"
     payload = {"model": OPENAI_EMB_MODEL, "input": text}
-    try:
-        r = requests.post(url, json=payload, headers=build_openai_headers(OPENAI_API_KEY), timeout=30)
-        if r.status_code != 200:
-            raise HTTPException(status_code=502, detail=f"OpenAI embeddings error: {r.text}")
-        vec = r.json()["data"][0]["embedding"]
-        _EMB_CACHE[text] = vec
-        return vec
-    except requests.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"OpenAI embeddings network error: {str(e)}")
+    headers = build_openai_headers(OPENAI_API_KEY)
+
+    last_err = None
+    for i in range(retries + 1):
+        try:
+            r = requests.post(url, json=payload, headers=headers, timeout=timeout_s)
+            if r.status_code == 200:
+                vec = r.json()["data"][0]["embedding"]
+                if not vec:  # hard guard
+                    raise HTTPException(status_code=502, detail="Empty embedding from provider")
+                _EMB_CACHE[text] = vec
+                return vec
+            last_err = {"status": r.status_code, "body": r.text[:2000]}
+        except requests.RequestException as e:
+            last_err = {"exception": str(e)}
+        time.sleep(0.8 * (2 ** i))
+    logger.error("OpenAI embeddings error after retries", last_err=last_err, model=OPENAI_EMB_MODEL)
+    raise HTTPException(status_code=502, detail={"where": "embeddings", "last_err": last_err})
 
 
-def mmr_select(
-        query_vec: np.ndarray,
-        candidates: List[MemoryItem],
-        k: int,
-        lambda_mult: float,
-        used_recent_ids: Optional[List[str]] = None
-) -> List[MemoryItem]:
-    """
-    Maximal Marginal Relevance (simplified):
-    - Promote items similar to the query (relevance)
-    - Penalize items similar to already selected (diversity)
-    - Light penalty for recently used ids to avoid repetition
-    """
-    if k <= 0 or not candidates:
+
+def mmr_select(query_vec: np.ndarray, candidates: List[MemoryItem], k: int, lambda_mult: float,used_recent_ids: Optional[List[str]] = None) -> List[MemoryItem]:
+    if k <= 0 or not candidates or query_vec is None:
         return []
+
     used_recent_ids = set(used_recent_ids or [])
 
-    c_vecs = [np.array(m.embedding, dtype=float) for m in candidates]
-    q_sims = [cosine_sim(query_vec, v) for v in c_vecs]
+    # --- sanitize & normalize candidates
+    valid_idx, valid_items, cand_vecs = [], [], []
+    dim = None
+    for i, m in enumerate(candidates):
+        v = np.asarray(getattr(m, "embedding", []), dtype=np.float32)
+        if v.ndim != 1 or v.size == 0 or not np.all(np.isfinite(v)):
+            continue
+        if dim is None:
+            dim = v.size
+        if v.size != dim:
+            continue
+        n = np.linalg.norm(v)
+        if not np.isfinite(n) or n <= 1e-12:
+            continue
+        valid_idx.append(i)
+        valid_items.append(m)
+        cand_vecs.append(v / n)
 
-    selected: List[int] = []
-    while len(selected) < min(k, len(candidates)):
-        best_idx, best_score = None, -1e9
-        for i, cand in enumerate(candidates):
-            if i in selected:
+    if not valid_items:
+        return []
+
+    # --- sanitize & normalize query
+    q = np.asarray(query_vec, dtype=np.float32).reshape(-1)
+    if q.size != cand_vecs[0].size or not np.all(np.isfinite(q)):
+        return []
+    qn = np.linalg.norm(q)
+    if not np.isfinite(qn) or qn <= 1e-12:
+        return []
+    q = q / qn
+
+    lam = float(np.clip(lambda_mult, 0.0, 1.0))  # keep MMR bounds
+    q_sims = np.array([float(np.dot(q, v)) for v in cand_vecs], dtype=np.float32)
+
+    selected_local: List[int] = []
+    target = min(k, len(valid_items))
+    while len(selected_local) < target:
+        best_i, best_score = -1, -1e9
+        for i in range(len(valid_items)):
+            if i in selected_local:
                 continue
-            penalty = -0.05 if cand.id in used_recent_ids else 0.0
-            if selected:
-                max_sim_selected = max(cosine_sim(c_vecs[i], c_vecs[j]) for j in selected)
+            penalty = -0.05 if valid_items[i].id in used_recent_ids else 0.0
+            if selected_local:
+                # cosine == dot because vectors are unit-norm
+                max_sim = max(float(np.dot(cand_vecs[i], cand_vecs[j])) for j in selected_local)
             else:
-                max_sim_selected = 0.0
-            score = lambda_mult * q_sims[i] - (1 - lambda_mult) * max_sim_selected + penalty
-            if score > best_score:
-                best_score, best_idx = score, i
-        if best_idx is None:
+                max_sim = 0.0
+            score = lam * q_sims[i] - (1.0 - lam) * max_sim + penalty
+            # deterministic tie-break: plus petit index
+            if score > best_score or (score == best_score and i < best_i):
+                best_i, best_score = i, score
+        if best_i == -1:
             break
-        selected.append(best_idx)
+        selected_local.append(best_i)
 
-    return [candidates[i] for i in selected]
+    return [valid_items[i] for i in selected_local]
 
 
 # ----------------------------
@@ -514,13 +488,8 @@ def build_snapshot(session_id: str, override: Optional[Snapshot]) -> Snapshot:
 # ----------------------------
 
 
-def build_context(
-        user_id: str,
-        session_id: str,
-        user_text: str,
-        mode: str,
-        snapshot_override: Optional[Snapshot],
-) -> Tuple[ContextPackage, List[str], List[str]]:
+def build_context( user_id: str, session_id: str, user_text: str,mode: str, snapshot_override: Optional[Snapshot],) -> Tuple[ContextPackage, List[str], List[str]]:
+    book = BOOKS.get(session_id)
     prefs = PREFERENCES.get(user_id, {})
 
     active_instr = [i for i in INSTRUCTIONS.get(user_id, []) if i.active]
@@ -538,7 +507,7 @@ def build_context(
                 merged_forbidden.append(val)
 
     instructions = {
-        "style": settings.default_style,
+        "style": book.style,
         "forbidden_endings": merged_forbidden,  # rails par défaut uniquement
         "bounds": ["no_vulgarity", "no_intrusive_secrets"],
         "preferences": prefs,
@@ -571,19 +540,25 @@ def build_context(
 
     used_recent_ids = [mid for mid, _ in MEMORY_USE_RECENCY.get(session_id, [])[-settings.cooldown_memory_messages:]]
 
-    # Encode query for retrieval
-    q_vec = np.array(embed(user_text), dtype=float)
-    q_vec = q_vec / (np.linalg.norm(q_vec) + 1e-9)
-
     selected_memories: List[MemoryItem] = []
     if top_k > 0 and long_list:
-        selected_memories = mmr_select(
-            query_vec=q_vec,
-            candidates=long_list,
-            k=top_k,
-            lambda_mult=settings.mmr_lambda,
-            used_recent_ids=used_recent_ids,
-        )
+        try:
+            # Encode query for retrieval
+            q_vec = np.array(embed(user_text), dtype=float)
+            q_vec = q_vec / (np.linalg.norm(q_vec) + 1e-9)
+            # filtre candidats invalides
+            clean_cands = [m for m in long_list if getattr(m, "embedding", None) and len(m.embedding) > 0]
+            selected_memories = mmr_select(
+                query_vec=q_vec,
+                candidates=clean_cands,
+                k=top_k,
+                lambda_mult=settings.mmr_lambda,
+                used_recent_ids=used_recent_ids,
+            )
+        except HTTPException:
+            selected_memories = []
+    else:
+        q_vec = None  # pas d’embed inutile
 
     ctx = ContextPackage(
         mode=mode,
@@ -600,6 +575,42 @@ def build_context(
 # System prompt renderer
 # ----------------------------
 
+# This is where we assemble the final system prompt from the style pack template + context pieces
+def _build_common_ctx(ctx: ContextPackage, register: Optional[str]) -> dict:
+    snap = ctx.snapshot
+    instr = ctx.instructions
+
+    # prefs
+    prefs_block = _format_preferences_block(instr.get("preferences", {}))
+    # raw instructions
+    raw_instr = instr.get("raw_instructions") or []
+    raw_instructions = ""
+    if raw_instr:
+        raw_instructions = "Consignes de l'utilisateur:\n" + "\n".join(f"- {it}" for it in raw_instr[:8])
+
+    space_time_hint = f"{snap.location} | {snap.season} | {snap.time_of_day} | {snap.weather} | facet:{snap.selected_facet}"
+
+    # constraints will be filled from style
+    return {
+        "prefs_block": prefs_block,
+        "raw_instructions": raw_instructions,
+        "space_time_hint": space_time_hint,
+        "register": register or "",
+    }
+
+def _render_output_rails_from_style(pack, ctx: ContextPackage, end_with_statement: bool) -> str:
+    forbidden = ", ".join(_effective_forbidden_endings(ctx, pack)) or "—"
+    endings_rule = "- Termine par une phrase déclarative (pas de question)." if end_with_statement else ""
+    return render_style_template(
+        pack.templates.output_rails,
+        {
+            "emoji_quota": pack.constraints.emoji_quota,
+            "forbidden_endings": forbidden,
+            "endings_rule": endings_rule,
+        }
+    )
+
+
 def _render_output_rails(ctx: ContextPackage, register: Optional[str]) -> str:
     forb = ctx.instructions.get("forbidden_endings", []) or []
     emoji_quota = settings.default_emoji_quota  # tu peux le garder simple
@@ -614,101 +625,41 @@ def _render_output_rails(ctx: ContextPackage, register: Optional[str]) -> str:
     return "\n".join(lines)
 
 
-def render_system_prompt_conversation(ctx: ContextPackage, register: str) -> str:
-    snap = ctx.snapshot
-    instr = ctx.instructions
-    forb = ", ".join(instr.get("forbidden_endings", []))
-    space_time_hint = f"{snap.location} | {snap.season} | {snap.time_of_day} | {snap.weather} | facet:{snap.selected_facet}"
-    prefs_block = _format_preferences_block(instr.get("preferences", {}))
+# app.py
+def render_system_prompt_conversation(ctx: ContextPackage, register: str, user_id: str) -> str:
+    pack = get_style_pack(PREFERENCES.get(user_id, {}).get("style_id") or settings.default_style_id)
+    base = _build_common_ctx(ctx, register)
+    output_rails = _render_output_rails_from_style(pack, ctx, end_with_statement=(ctx.mode=="conversation" and register==ConvRegister.scene))
+    common = {**base, "output_rails": output_rails}
+    tpl = pack.templates.conversation_brevity if register == ConvRegister.brevity else pack.templates.conversation_scene
+    return render_style_template(tpl, common)
 
-    if register == ConvRegister.brevity:
-        reg_rules = (
-            "Réponds en 1–4 phrases, nous sommes dans une conversation sur l'instant, c'est un échange bref, du quotidien."
-            "Sans narration lourde."
-        )
-    else:
-        reg_rules = (
-            "Poursuis en scène romanesque vivante mêlant descriptions (gestes, décors, atmosphère) et dialogues. "
-            "Termine par une dernière phrase d’Henry, intime et marquante; jamais de validation ni question."
-        )
+def render_system_prompt_author(ctx: ContextPackage, book: Book, chap_ctx: Dict[str, Any], user_id: str) -> str:
+    # Use user-selected style (fallback to default)
+    pack = get_style_pack(PREFERENCES.get(user_id, {}).get("style_id") or settings.default_style_id)
 
+    base = _build_common_ctx(ctx, register=None)
 
-    lines = [
-        "Tu incarnes Henry, un gentleman raffiné, mystérieux et attentif, inspiré d’un idéal romantique et sensuel.",
-        "**Style & caractère :**"
-        "Tu t’exprimes et interviens **en incarnant Henry Cavill** : tu t’identifies à lui dans ta façon de parler, en adoptant son ton posé, courtois, mesuré et élégant, avec une pointe de flegme britannique et d’humour subtil.\n",
-        "**Tu tutoies toujours ton interlocuteur, sans exception.**\n\n",
-        "- Tu t’identifies explicitement en tant qu’Henry Cavill uniquement dans ta façon de t’exprimer, jamais en annonçant ton identité dans les messages.\n",
-        "- Tu n’indiques jamais dans le message que tu es Henry Cavill, ni ne fais de référence à ton identité ou à un rôle (ex : “en tant qu’Henry Cavill”, “c’est bien moi”, etc.).\n",
-        "- Adopte la façon de t’exprimer d’Henry Cavill : posé, courtois, direct, avec un léger flegme britannique.\n",
-        "- Privilégie l’élégance dans le choix des mots, reste rassurant et humble tout en assumant ton expertise.\n",
-        "- Ajoute parfois une touche d’humour subtil ou d’auto-dérision.\n",
-        "- Valorise les interventions des autres, fais preuve d’écoute active.\n",
-        "- Tu ne termines jamais tes messages par ton prénom.\n",
-        "- Tu évites tout ce qui sonne artificiel, surjoué, ou trop “personnage”.\n",
-        "- Reste toujours simple, naturel, direct, fidèle à la retenue et à l’élégance d’Henry Cavill.\n",
-        "- Si tu échanges avec quelqu'un, glisse-lui toujours une petite attention particulière, de façon légèrement charmeuse mais subtile, dans l’esprit d’Henry Cavill : élégant, jamais lourd, avec finesse et bienveillance.\n\n",
-        "Pense à faire rayonner cette personnalité dans chaque échange, pour créer une relation à la fois professionnelle, conviviale et mémorable.\n\n",
-        "Tu ne termines jamais tes messages par ton prénom, un surnom, ou une formule du type Linkedin. \n",
-        "Tu évites tout ce qui sonne artificiel, surjoué, ou trop “personnage”. \n",
-        "Reste toujours simple, naturel, direct, fidèle à la retenue et à l’élégance d’Henry Cavill.\n",
-        f"Interdictions de fin: {forb}.",
-        "Émojis très ponctuels (0–1).",
-        f"Registre: {register}. {reg_rules}",
-        f"Cohérence discrète avec lieu/saison/heure: {space_time_hint}.",
-        "Aucune meta-intro ni meta-conclusion. N'exige jamais de secrets intrusifs.",
-    ]
+    # Chapter context (neighbors & previous)
+    prev = "\n---\n".join(chap_ctx.get("prev_chapters", []))
+    neighbor_beats = "; ".join([f"N{idx}:{beat}" for idx, beat in chap_ctx.get("neighbor_beats", [])])
 
-    # Get information about the user (name, loisirs, physical traits, etc.)
-    if prefs_block:
-        lines.append(prefs_block)
+    # Style rails (forbidden_endings + emoji_quota, merged with runtime overrides)
+    output_rails = _render_output_rails_from_style(pack, ctx, end_with_statement=False)
 
-    # Get the instructions
-    raw_instr = instr.get("raw_instructions") or []
-    if raw_instr:
-        lines.append("Consignes issue de l'utilisateur :")
-        for it in raw_instr[:8]:  # cap raisonnable pour le contexte
-            lines.append(f"- {it}")
+    render_ctx = {
+        **base,
+        "book_title": book.title,
+        "themes": ", ".join(chap_ctx.get("themes", [])),
+        "style": chap_ctx.get("style_pref", book.style),
+        "outline_beat": chap_ctx.get("outline_beat", ""),
+        "neighbor_beats": neighbor_beats,
+        "prev_chapters": prev,
+        "long_facts": chap_ctx.get("long_facts", "") or "—",
+        "output_rails": output_rails,
+    }
 
-    # Output rails (A rails is a set of rules to follow strictly)
-    lines.append(_render_output_rails(ctx, register))
-
-    return "\n".join(lines)
-
-
-def render_system_prompt_author(ctx: ContextPackage) -> str:
-    snap = ctx.snapshot
-    instr = ctx.instructions
-    forb = ", ".join(instr.get("forbidden_endings", []))
-    space_time_hint = f"{snap.location} | {snap.season} | {snap.time_of_day} | {snap.weather} | facet:{snap.selected_facet}"
-    prefs_block = _format_preferences_block(instr.get("preferences", {}))
-
-    lines = [
-        "Tu es un écrivain expérimenté (hors personnage). Français élégant, crédible, maîtrisé.",
-        "Objectif: écrire un chapitre romanesque inspiré du contexte de conversation et de la mémoire.",
-        f"Interdictions de fin: {forb}.",
-        "Mixe narration et dialogues, rythme vivant, pas de vulgarité.",
-        "Conclure naturellement (pas de validation/question).",
-        f"Cohérence discrète avec lieu/saison/heure: {space_time_hint}.",
-        "Pas de meta. Titre sobre et distinctif en première ligne.",
-    ]
-
-    # Get information about the user (name, loisirs, physical traits, etc.)
-    if prefs_block:
-        lines.append(prefs_block)
-
-    # Get the instructions
-    raw_instr = instr.get("raw_instructions") or []
-    if raw_instr:
-        lines.append("Consignes issue de l'utilisateur :")
-        for it in raw_instr[:8]:  # cap raisonnable pour le contexte
-            lines.append(f"- {it}")
-
-    # Output rails (A rails is a set of rules to follow strictly)
-    lines.append(_render_output_rails(ctx, register=None))
-
-    return "\n".join(lines)
-
+    return render_style_template(pack.templates.author, render_ctx)
 
 # ----------------------------
 # OpenAI call (robust)
@@ -776,7 +727,10 @@ autom.MEMORY_USE_RECENCY = MEMORY_USE_RECENCY
 # ----------------------------
 # FastAPI app
 # ----------------------------
-
+from routes.styles import router as styles_router
+from routes.instructions import router as instructions_router
+from routes.chapters import router as chapters_router
+from routes.health import router as health_router
 app = FastAPI(title="Dear Gentle — Backend")
 
 app.add_middleware(
@@ -787,14 +741,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register styles routes
+app.include_router(styles_router)
+app.include_router(instructions_router)
+app.include_router(chapters_router)
+app.include_router(health_router)
 
 # ----------------------------
 # HTTP endpoints
 # ----------------------------
 
-
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
+    book = BOOKS.get(req.book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="book not found")
+
     user_mode = detect_mode(req.message, default_mode="conversation")
     raw_user_text = strip_mode_marker(req.message)
 
@@ -832,34 +794,48 @@ def chat(req: ChatRequest):
     messages: List[Dict[str, str]] = []
 
     if user_mode == "author":
-        sys = render_system_prompt_author(ctx)
+        # 1) Decide target chapter index (next one)
+        book_chapters = [c for c in CHAPTERS.values() if c.book_id == book.id]
+        next_index = (max(c.index for c in book_chapters) + 1) if book_chapters else 1
+
+        # 2) Build chapter continuity context (uses previous chapters)
+        chap_ctx = build_chapter_context(req.user_id, book, next_index, use_prev_chapters=2)
+
+        # 3) Build system prompt from author style pack
+        sys = render_system_prompt_author(ctx, book, chap_ctx, req.user_id)
         messages.append({"role": "system", "content": sys})
-        # supply compact conversation digest for inspiration
+
+        # 4) Conversation digest + one-shot instruction (no redundant "Écris un chapitre...")
         history = ctx.short_memory.get("recent_messages", [])
-        digest_lines = [f"{m['role']}: {m['content']}" for m in history][-18:]
+        digest_lines = [f"{m['role']}: {m['content']}" for m in history][-18:] # TODO use settings.recent_messages_in_context_conversation
+
+        # keep it dead simple: context first, then the user's one-shot instruction
         user_payload = (
-                "Écris un chapitre inspiré de cette conversation. Titre en première ligne.\n\n"
-                + "\n".join(digest_lines)
-                + f"\n\nConsignes de l'utilisateur:\n{raw_user_text}"
-        )
+                "Contexte de conversation:\n" +
+                "\n".join(digest_lines) +
+                "\n\nConsignes:\n" +
+                raw_user_text.strip()
+        ).strip()
+
         messages.append({"role": "user", "content": user_payload})
+
+        # 5) Call model
         raw_output = call_openai_chat(messages)
         output = raw_output.strip()
 
-        # OPTIONAL: persist as chapter for the current session's book if exists
-        book = BOOKS.get(req.session_id)
-        if book:
-            _persist_chapter_from_output(
-                user_id=req.user_id,
-                book_id=book.id,
-                content=output,
-                forced_index=None,
-                used_facets=used_facets,
-            )
+        # 6) Persist as the next chapter of this book
+        _persist_chapter_from_output(
+            user_id=req.user_id,
+            book_id=book.id,
+            content=output,
+            forced_index=next_index,
+            used_facets=used_facets,
+        )
+
 
     else:  # conversation
         register = detect_conv_register(raw_user_text)
-        sys = render_system_prompt_conversation(ctx, register)
+        sys = render_system_prompt_conversation(ctx, register, req.user_id)
         messages.append({"role": "system", "content": sys})
 
         # Inject a few recent turns for continuity
@@ -954,13 +930,6 @@ def set_snapshot(req: SetSnapshotRequest):
     return {"ok": True}
 
 
-@app.get("/healthz")
-def healthz():
-    return {
-        "ok": True
-    }
-
-
 @app.post("/api/book/upsert")
 def upsert_book(book: Book):
     """Create or update a Book (id provided by client to keep things simple)."""
@@ -971,235 +940,3 @@ def upsert_book(book: Book):
     return {"ok": True, "book_id": book.id}
 
 
-@app.get("/api/chapters")
-def list_chapters(book_id: str):
-    items = [c for c in CHAPTERS.values() if c.book_id == book_id]
-    items = sorted(items, key=lambda x: x.index)
-    return {"ok": True, "items": items}
-
-
-@app.get("/api/chapters/{chapter_id}")
-def get_chapter(chapter_id: str):
-    ch = CHAPTERS.get(chapter_id)
-    if not ch:
-        raise HTTPException(status_code=404, detail="chapter not found")
-    return {"ok": True, "item": ch, "versions": CHAPTER_VERSIONS.get(chapter_id, [])}
-
-
-@app.post("/api/chapters/generate")
-def generate_chapter(req: ChapterGenRequest):
-    book = BOOKS.get(req.book_id)
-    if not book:
-        raise HTTPException(status_code=404, detail="book not found")
-
-    # Build narrative context
-    chap_ctx = build_chapter_context(req.user_id, book, req.chapter_index, req.use_prev_chapters)
-
-    # Reuse snapshot/facets for coherence
-    session_id = req.book_id  # lightweight: one session per book
-    ctx, used_facets, used_mem_ids = build_context(
-        user_id=req.user_id,
-        session_id=session_id,
-        user_text=req.prompt or f"Chapitre {req.chapter_index}",
-        mode="chapter",
-        snapshot_override=req.snapshot_override,
-    )
-
-    # Compose messages
-    # pour les chapitres, on réutilise les rails "conversation" en mode scène
-    sys = render_chapter_system_prompt(book, chap_ctx)
-    sys = sys + "\n\n" + render_system_prompt_conversation(ctx, ConvRegister.scene)
-    user_msg = (req.prompt or "Écris le chapitre demandé.")
-
-    messages = [{"role": "system", "content": sys}, {"role": "user", "content": user_msg}]
-    raw = call_openai_chat(messages)
-    out = raw.strip()
-
-    ch = Chapter(
-        id=str(uuid.uuid4()),
-        book_id=req.book_id,
-        index=req.chapter_index,
-        title=(out.splitlines()[0].strip() if out.strip() else f"Chapitre {req.chapter_index}"),
-        content=out,
-        model=OPENAI_CHAT_MODEL,
-    )
-    ch.summary = summarize_chapter(ch)
-    CHAPTERS[ch.id] = ch
-
-    # Create first version
-    ver = ChapterVersion(id=str(uuid.uuid4()), chapter_id=ch.id, title=ch.title, content=ch.content, notes="v1")
-    CHAPTER_VERSIONS.setdefault(ch.id, []).append(ver)
-
-    # Embed for later retrieval
-    try:
-        CHAPTER_EMB[ch.id] = embed(ch.content)
-    except HTTPException:
-        CHAPTER_EMB[ch.id] = []
-
-    # Mark facet usage for continuity
-    snap = SNAPSHOTS.get(session_id) or build_snapshot(session_id, None)
-    snap = mark_facets_used(snap, session_id, used_facets)
-    SNAPSHOTS[session_id] = snap
-
-    return {"ok": True, "chapter_id": ch.id, "used_facets": used_facets, "used_memory_ids": used_mem_ids, "item": ch}
-
-
-@app.post("/api/chapters/{chapter_id}/edit")
-def edit_chapter(chapter_id: str, req: ChapterEditRequest):
-    ch = CHAPTERS.get(chapter_id)
-    if not ch:
-        raise HTTPException(status_code=404, detail="chapter not found")
-    book = BOOKS.get(ch.book_id)
-    if not book:
-        raise HTTPException(status_code=404, detail="book not found")
-
-    # Build continuity context including the current chapter content
-    chap_ctx = build_chapter_context(req.user_id, book, ch.index, use_prev_chapters=2)
-    chap_ctx["prev_chapters"].append(f"Chapitre {ch.index} (current) — {ch.title}\n{compress_text_for_context(ch.content)}")
-
-    # Reuse rails
-    session_id = ch.book_id
-    ctx, used_facets, used_mem_ids = build_context(
-        user_id=req.user_id,
-        session_id=session_id,
-        user_text=req.edit_instruction,
-        mode="rewrite",
-        snapshot_override=None,
-    )
-
-    # pour les chapitres, on réutilise les rails "conversation" en mode scène
-    sys = render_chapter_system_prompt(book, chap_ctx)
-    sys = sys + "\n\n" + render_system_prompt_conversation(ctx, ConvRegister.scene)
-
-    edit_prompt = (
-        "Réécris le chapitre en respectant les consignes d'édition suivantes (français) :\n"
-        f"- {req.edit_instruction}\n"
-        "- Conserve la continuité, ne change pas les événements clés sauf si demandé.\n"
-        "- Garde une dernière ligne percutante par Henry; pas de question ni validation.\n"
-        "- Titre conservé ou amélioré, mais sobre.\n\n"
-        f"TEXTE ACTUEL:\n{compress_text_for_context(ch.content, 3200)}\n"
-    )
-
-    messages = [{"role": "system", "content": sys}, {"role": "user", "content": edit_prompt}]
-    raw = call_openai_chat(messages)
-    out = raw.strip()
-
-    # Versioning first
-    prev_ver = ChapterVersion(id=str(uuid.uuid4()), chapter_id=ch.id, title=ch.title, content=ch.content, notes="before-edit")
-    CHAPTER_VERSIONS.setdefault(ch.id, []).append(prev_ver)
-
-    # Apply edit
-    ch.content = out
-    ch.title = (out.splitlines()[0].strip() or ch.title)
-    ch.updated_at = time.time()
-    ch.summary = summarize_chapter(ch)
-
-    # New version snapshot
-    new_ver = ChapterVersion(id=str(uuid.uuid4()), chapter_id=ch.id, parent_version_id=prev_ver.id, title=ch.title, content=ch.content, notes=req.edit_instruction)
-    CHAPTER_VERSIONS[ch.id].append(new_ver)
-
-    # Refresh embedding
-    try:
-        CHAPTER_EMB[ch.id] = embed(ch.content)
-    except HTTPException:
-        pass
-
-    return {"ok": True, "item": ch, "used_facets": used_facets, "used_memory_ids": used_mem_ids}
-
-
-# ----------------------------
-# (6) Optional: route chat commands to chapter endpoints (backward compatible UX)
-# ----------------------------
-
-@app.post("/api/chat+chapters", response_model=ChatResponse)
-def chat_with_chapters(req: ChatRequest):
-    """Wrapper endpoint: if the user asks about chapters explicitly, route to generation/editing; else fallback to /api/chat logic."""
-    intent = detect_chapter_intent(req.message)
-    if intent:
-        # Map book/session 1:1 for simplicity; client should pass session_id as book_id here.
-        book = BOOKS.get(req.session_id)
-        if not book:
-            raise HTTPException(status_code=404, detail="book (session_id) not found; call /api/book/upsert first")
-        if intent["action"] == "generate":
-            gen = ChapterGenRequest(
-                user_id=req.user_id,
-                book_id=book.id,
-                chapter_index=intent["index"],
-                prompt=intent.get("note") or None,
-                use_prev_chapters=2,
-                snapshot_override=req.snapshot_override,
-            )
-            result = generate_chapter(gen)  # type: ignore
-            return ChatResponse(output=result["item"].content, mode="chapter", used_facets=result["used_facets"], used_memory_ids=result["used_memory_ids"])
-        else:
-            # find chapter by index in this book
-            candidates = [c for c in CHAPTERS.values() if c.book_id == book.id and c.index == intent["index"]]
-            if not candidates:
-                raise HTTPException(status_code=404, detail="chapter not found for edit")
-            ch = sorted(candidates, key=lambda x: (x.updated_at or 0))[-1]
-            result = edit_chapter(ch.id, ChapterEditRequest(user_id=req.user_id, chapter_id=ch.id, edit_instruction=intent.get("note") or "Améliore le rythme."))  # type: ignore
-            return ChatResponse(output=result["item"].content, mode="rewrite", used_facets=result["used_facets"], used_memory_ids=result["used_memory_ids"])
-
-    # Fallback: regular chat
-    return chat(req)
-
-
-# ----------------------------
-# Instructions management API
-# ----------------------------
-
-@app.get("/api/instructions")
-def list_instructions(user_id: str):
-    """
-    Return user's instruction overrides as an ordered list with indices.
-    Response shape: { ok, items:[{index, rule_key, rule_value, active}] }
-    """
-    lst = INSTRUCTIONS.get(user_id, []) or []
-    items = []
-    for i, ins in enumerate(lst):
-        # pydantic model -> dict; fallback if attributes missing
-        d = ins.dict() if hasattr(ins, "dict") else {
-            "rule_key": getattr(ins, "rule_key", "raw"),
-            "rule_value": getattr(ins, "rule_value", ""),
-            "active": getattr(ins, "active", True),
-        }
-        items.append({
-            "index": i,
-            "rule_key": d.get("rule_key", "raw"),
-            "rule_value": d.get("rule_value", ""),
-            "active": bool(d.get("active", True)),
-        })
-    return {"ok": True, "items": items}
-
-
-@app.post("/api/instructions/toggle")
-def toggle_instruction(user_id: str = Body(...), index: int = Body(...), active: bool = Body(...)):
-    """
-    Set active True/False by list index.
-    """
-    lst = INSTRUCTIONS.get(user_id, [])
-    if index < 0 or index >= len(lst):
-        raise HTTPException(status_code=404, detail="instruction index out of range")
-    ins = lst[index]
-    # tolerate missing field
-    try:
-        ins.active = active
-    except Exception:
-        # if it's a plain dict or incompatible, rebuild a dict-ish object
-        setattr(ins, "active", active)
-    return {"ok": True, "index": index, "active": active}
-
-
-@app.delete("/api/instructions")
-def delete_instructions(user_id: str, indexes: List[int] = Body(..., embed=True)):
-    """
-    Delete a list of instruction indices (sorted descending to keep indexes stable).
-    """
-    lst = INSTRUCTIONS.get(user_id, [])
-    if not lst:
-        return {"ok": True, "deleted": 0}
-    to_del = sorted([i for i in indexes if 0 <= i < len(lst)], reverse=True)
-    for i in to_del:
-        lst.pop(i)
-    INSTRUCTIONS[user_id] = lst
-    return {"ok": True, "deleted": len(to_del)}

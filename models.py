@@ -61,6 +61,7 @@ class ContextPackage(BaseModel):
 
 class ChatRequest(BaseModel):
     user_id: str
+    book_id: str
     session_id: str
     message: str
     snapshot_override: Optional[Snapshot] = None
