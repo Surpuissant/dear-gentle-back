@@ -1,5 +1,8 @@
+"""Utility helpers shared across the backend."""
+
 import datetime as dt
 from typing import Dict
+
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -29,9 +32,12 @@ def infer_season_from_date(d: dt.datetime) -> str:
 def infer_time_of_day(d: dt.datetime) -> str:
     """Coarse-grained moment of the day."""
     h = d.hour
-    if 5 <= h < 12: return "morning"
-    if 12 <= h < 17: return "afternoon"
-    if 17 <= h < 22: return "evening"
+    if 5 <= h < 12:
+        return "morning"
+    if 12 <= h < 17:
+        return "afternoon"
+    if 17 <= h < 22:
+        return "evening"
     return "night"
 
 

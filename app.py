@@ -488,8 +488,24 @@ def build_snapshot(session_id: str, override: Optional[Snapshot]) -> Snapshot:
 # ----------------------------
 
 
-def build_context( user_id: str, session_id: str, user_text: str,mode: str, snapshot_override: Optional[Snapshot],) -> Tuple[ContextPackage, List[str], List[str]]:
-    book = BOOKS.get(session_id)
+def build_context(
+    user_id: str,
+    session_id: str,
+    book_id: str,
+    user_text: str,
+    mode: str,
+    snapshot_override: Optional[Snapshot],
+) -> Tuple[ContextPackage, List[str], List[str]]:
+    """Assemble runtime context for Henry.
+
+    Historically this function tried to recover the ``Book`` using the
+    ``session_id`` which is unrelated.  That subtle mismatch meant that
+    preferences such as the selected writing style were silently dropped
+    (``book`` resolved to ``None``) and the system prompt lost its guard‑rails.
+    We now take the ``book_id`` explicitly to make the dependency obvious.
+    """
+
+    book = BOOKS.get(book_id)
     prefs = PREFERENCES.get(user_id, {})
 
     active_instr = [i for i in INSTRUCTIONS.get(user_id, []) if i.active]
@@ -507,8 +523,10 @@ def build_context( user_id: str, session_id: str, user_text: str,mode: str, snap
                 merged_forbidden.append(val)
 
     instructions = {
-        "style": book.style,
-        "forbidden_endings": merged_forbidden,  # rails par défaut uniquement
+        # When a book is missing (should be rare) we gracefully fall back to the
+        # default rails so the assistant keeps behaving.
+        "style": getattr(book, "style", None),
+        "forbidden_endings": merged_forbidden,
         "bounds": ["no_vulgarity", "no_intrusive_secrets"],
         "preferences": prefs,
         "raw_instructions": [i.rule_value for i in active_instr if getattr(i, "rule_key", "") == "raw"],
@@ -522,7 +540,10 @@ def build_context( user_id: str, session_id: str, user_text: str,mode: str, snap
     # Filtrer les ">>" du contexte
     msgs_no_instr = [m for m in msgs if getattr(m, "mode", None) != "instruction"]
 
-    if mode == "author":
+    authorial_mode = mode in {"author", "rewrite"}
+    if authorial_mode:
+        # Chapter writing and rewrites benefit from a broader context window and
+        # richer long-term memory selection.
         k = settings.recent_messages_in_context_author
         top_k = settings.emb_top_k_author
     else:  # conversation
@@ -782,10 +803,18 @@ def chat(req: ChatRequest):
         Message(role="user", content=raw_user_text, mode=user_mode)
     )
 
+    # Extract potential long-term memories before building the prompt so the
+    # freshly captured fact can already inform the answer.
+    try:
+        autom.maybe_autocapture(req.user_id, req.session_id, raw_user_text)
+    except Exception:
+        logger.warning("auto-mem capture failed", exc_info=True)
+
     # build context
     ctx, used_facets, used_mem_ids = build_context(
         user_id=req.user_id,
         session_id=req.session_id,
+        book_id=req.book_id,
         user_text=raw_user_text,
         mode=user_mode,
         snapshot_override=req.snapshot_override,
@@ -846,19 +875,6 @@ def chat(req: ChatRequest):
         messages.append({"role": "user", "content": raw_user_text})
         raw_output = call_openai_chat(messages)
         output = raw_output.strip()
-
-        # Auto-memory system plugin into MEMORIES db (see autom.*)
-        # - Call maybe_autocapture(user_id, session_id, msg) after storing user message
-        # - It sends msg to LLM to extract up to 2 memory candidates
-        # - Each candidate is deduped against existing memories (cosine_sim > 0.92)
-        # - If confidence >= 0.80, it is auto-stored as MemoryItem
-        # - Else, it is queued in PENDING_AUTOMEM for user review
-        # - Session-level cooldown (30 min) to avoid re-capturing same fact repeatedly
-        # - Use list_pending, accept_pending, reject_pending for REST endpoints
-        try:
-            autom.maybe_autocapture(req.user_id, req.session_id, raw_user_text)
-        except Exception:
-            logger.warning("auto-mem capture failed", exc_info=True)
 
     # persist assistant message
     CONVERSATIONS[req.session_id].append(Message(role="assistant", content=output, mode=user_mode))
