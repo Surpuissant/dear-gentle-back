@@ -1,7 +1,13 @@
 # Dear Gentle — Backend
 
 ## Aperçu
-Backend FastAPI qui alimente "Dear Gentle", une expérience de conversation et d'écriture romanesque centrée sur la persona d'Henry. L'API orchestre les appels OpenAI, applique des garde-fous stylistiques, gère les préférences utilisateurs et structure la mémoire à court et long terme pour conserver la cohérence narrative.
+Backend FastAPI qui alimente "Dear Gentle", un "book boyfriend" virtuel que l'on apprivoise au fil d'échanges très longs. Chaque utilisateur converse avec un gentleman en devenir (Henry par défaut) dont la personnalité et les rails d'écriture proviennent d'un **style pack** dédié. L'API orchestre les appels OpenAI, applique des garde-fous stylistiques, gère la mémoire de la relation et construit des chapitres romanesques à partir des conversations.
+
+### Concept narratif
+- **Phase de séduction** : l'utilisateur discute pendant des dizaines de pages (10 à 30 pages équivalent) avec son gentleman. Celui-ci conserve les informations importantes, développe une voix crédible et fait évoluer la relation.
+- **Mémoire vivante** : le gentleman capture, pondère et réutilise les faits pertinents (préférences, biographie, engagements, détails de scènes) pour rester cohérent même après de longues sessions.
+- **Ancrage spatio-temporel** : les messages prennent en compte les indications de l'utilisateur (heure, météo, ambiance). Le snapshot courant peut être mis à jour dynamiquement pour refléter le soir, la pluie ou tout autre contexte partagé.
+- **Chapitres romancés** : à tout moment, l'utilisateur peut convoquer l'"auteur" (un second mode LLM) pour transformer l'échange en chapitre. Les chapitres sont stockés, résumés et réinjectés pour nourrir la suite de l'histoire.
 
 ## Pile technique
 - **Python 3.11+**
@@ -40,7 +46,7 @@ Les dépendances exactes sont listées dans [`requirements.txt`](requirements.tx
 - `FRONT_ORIGIN` *(défaut : `http://localhost:3000`)*
 
 ## Structure fonctionnelle
-- `app.py` : point d'entrée FastAPI, logique principale de construction du contexte, intégration OpenAI et gestion du cycle de conversation/chapitres.
+- `app.py` : point d'entrée FastAPI, logique principale de construction du contexte, intégration OpenAI et gestion du cycle de conversation/chapitres (gentleman vs auteur).
 - `models.py` : modèles Pydantic pour messages, snapshots, préférences, livres et chapitres.
 - `stores.py` : "bases" en mémoire (utilisateurs, instructions, chapitres, embeddings...).
 - `style_packs.py` : définitions des packs de style, contraintes et templates système.
@@ -65,19 +71,26 @@ Les dépendances exactes sont listées dans [`requirements.txt`](requirements.tx
 | `GET /api/health` | Vérification simple de disponibilité. |
 
 ## Gestion de la mémoire & du style
-- **Mémoire courte** : reconstruction du contexte conversationnel et résumés pour limiter la fenêtre de tokens tout en préservant la cohérence. Les messages sont stockés par session et condensés avant envoi au modèle.
-- **Mémoire longue** : souvenirs semés manuellement ou capturés automatiquement, vectorisés pour récupération par similarité cosinus.
-- **Auto-mémoire** : `auto_memory.py` extrait jusqu'à 3 faits par message, applique des seuils de confiance (≥0,80 pour auto-validation), et évite les doublons par embeddings.
-- **Packs de style** : `style_packs.py` expose des templates système (conversation courte, scène, auteur, rails de sortie) et des contraintes (quota d'émojis, fins interdites). Un endpoint permet de sélectionner le style par utilisateur.
+- **Mémoire courte** : reconstruction du contexte conversationnel et résumés rapides pour limiter la fenêtre de tokens tout en préservant la cohérence. Les messages sont stockés par session et reformatés avant envoi au modèle.
+- **Mémoire longue** : souvenirs semés manuellement ou capturés automatiquement, vectorisés pour récupération par similarité cosinus. Les chapitres enregistrés alimentent également la continuité du récit.
+- **Auto-mémoire** : `auto_memory.py` extrait jusqu'à 3 faits par message, applique des seuils de confiance (≥0,80 pour auto-validation), évite les doublons par embeddings et impose un cooldown pour ne pas répéter les mêmes souvenirs.
+- **Packs de style** : `style_packs.py` expose des templates système (conversation courte, scène, auteur, rails de sortie) et des contraintes (quota d'émojis, fins interdites). Un endpoint permet de sélectionner le style par utilisateur et donc d'alterner entre différents gentlemen.
+- **Chapitres** : chaque chapitre romancé est résumé et indexé (embeddings) pour être réutilisé lors des prochains tours ou des réécritures.
 
 ## Modes de conversation
 Le backend détecte automatiquement trois modes :
-- **Conversation** : réponses courtes ou scénarisées selon le registre détecté (bref / scène).
-- **Author** : génère et persiste un nouveau chapitre romanesque, en s'appuyant sur l'outline, les chapitres précédents compressés et la mémoire longue.
-- **Instruction (`>>`)** : enregistre des overrides persistants sans appeler l'API OpenAI.
+- **Conversation** : réponses courtes ou scénarisées selon le registre détecté (bref / scène). Le gentleman incarne son style pack tout en tenant compte du snapshot spatio-temporel.
+- **Author** : génère et persiste un nouveau chapitre romanesque, en s'appuyant sur l'outline du livre, les chapitres précédents compressés et la mémoire longue (faits utilisateur + chapitres).
+- **Instruction (`>>`)** : enregistre des overrides persistants (consignes, contraintes) sans appeler l'API OpenAI.
 
 ## Persistance & limites actuelles
 Toutes les données (utilisateurs, conversations, snapshots, livres, chapitres, mémoires) sont stockées en mémoire. Pour un déploiement production, remplacer ces dictionnaires par des services persistants (base de données, cache distribué, stockage vecteur).
+
+## Scope POC & pistes d'amélioration
+Ce dépôt illustre un POC fonctionnel pour prouver la viabilité du concept "book boyfriend".
+- **Ce qui est couvert** : sélection de style pack, gestion des préférences, capture automatique de souvenirs, continuité chapitre par chapitre, orchestrations OpenAI.
+- **À garder en tête pour la suite** : persistance durable, modèle de mémoire plus riche (résumés multi-sessions, tags narratifs), multiples gentlemen packagés, détection automatique des indices temporels/météo, interface de validation des auto-mémoires.
+- **Objectif** : livrer rapidement une base crédible sur laquelle itérer sans dépasser le scope POC.
 
 ## Développement
 - Logging structuré via `structlog` (format JSON + timestamp ISO) dès le démarrage.
