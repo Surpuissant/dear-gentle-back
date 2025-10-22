@@ -41,6 +41,7 @@ def edit_chapter(chapter_id: str, req: ChapterEditRequest):
     ctx, used_facets, used_mem_ids = build_context(
         user_id=req.user_id,
         session_id=session_id,
+        book_id=book.id,
         user_text=req.edit_instruction,
         mode="rewrite",
         snapshot_override=None,
