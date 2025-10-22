@@ -105,6 +105,7 @@ from stores import USERS # Structured as Dict[str, Dict[str, str]] = {} -> store
 from stores import INSTRUCTIONS # Structured as Dict[str, List[InstructionOverride]] = {}  # user_id -> overrides
 CONVERSATIONS: Dict[str, List[Message]] = {}  # session_id -> [Message]
 SUMMARIES: Dict[str, str] = {}  # session_id -> rolling summary text
+SUMMARY_STATE: Dict[str, Dict[str, Any]] = {}  # session_id -> {"last_turn": int}
 PREFERENCES: Dict[str, Dict[str, str]] = {}  # user_id -> {key:value}
 MEMORIES: Dict[str, List[MemoryItem]] = {}  # user_id -> [MemoryItem]
 SNAPSHOTS: Dict[str, Snapshot] = {}  # session_id -> Snapshot
@@ -159,6 +160,78 @@ def compress_text_for_context(text: str, max_tokens: int = 400) -> str:
     return head + "\n…\n" + tail
 
 
+def _clean_line_for_summary(text: str) -> str:
+    """Collapse whitespace to keep the summary payload compact."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _format_messages_for_summary(messages: List[Message], limit: int) -> str:
+    """Serialize the last ``limit`` conversation messages for the summarizer."""
+    window = messages[-limit:]
+    lines: List[str] = []
+    for m in window:
+        if getattr(m, "mode", None) not in (None, "conversation"):
+            continue
+        content = _clean_line_for_summary(m.content)
+        if not content:
+            continue
+        role = m.role.upper()
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
+def maybe_refresh_summary(session_id: str) -> None:
+    """Refresh the rolling summary after a few new conversational turns."""
+    conv = CONVERSATIONS.get(session_id, [])
+    if not conv:
+        return
+
+    # Keep only conversational exchanges (ignore >> instructions and author outputs).
+    convo_msgs = [m for m in conv if getattr(m, "mode", None) in (None, "conversation")]
+    total_turns = len(convo_msgs)
+    if total_turns < 4:
+        return
+
+    meta = SUMMARY_STATE.get(session_id, {})
+    last_turn = int(meta.get("last_turn", 0))
+    if total_turns - last_turn < settings.summary_refresh_every_n_turns and session_id in SUMMARIES:
+        return
+
+    window = max(settings.recent_messages_in_context_conversation * 2, 20)
+    digest = _format_messages_for_summary(convo_msgs, limit=window)
+    if not digest:
+        return
+
+    prev_summary = SUMMARIES.get(session_id, "")
+    prompt = (
+        "Résumé actuel (peut être vide) :\n"
+        f"{prev_summary or '(aucun)'}\n\n"
+        "Nouvelles répliques à intégrer :\n"
+        f"{digest}\n\n"
+        "Actualise ce résumé en français (4 à 6 phrases), ton neutre et narratif. "
+        "Conserve les faits, émotions et engagements importants. Pas de méta ni de listes."
+    )
+    messages_payload = [
+        {
+            "role": "system",
+            "content": (
+                "Tu résumes une relation épistolaire longue. Mets à jour un résumé compact "
+                "en français en 4 à 6 phrases, cohérentes et sans listes à puces."
+            ),
+        },
+        {"role": "user", "content": prompt},
+    ]
+    try:
+        summary = call_openai_chat(messages_payload).strip()
+    except HTTPException:
+        SUMMARY_STATE[session_id] = {"last_turn": total_turns}
+        return
+
+    if summary:
+        SUMMARIES[session_id] = summary
+    SUMMARY_STATE[session_id] = {"last_turn": total_turns}
+
+
 def summarize_chapter(ch: Chapter) -> str:
     """Create/refresh a compact summary for a chapter using the chat model."""
     sys = "Summarize the chapter in 5-8 sharp bullet points (French). No meta."
@@ -173,7 +246,14 @@ def summarize_chapter(ch: Chapter) -> str:
     return s.strip()
 
 
-def build_chapter_context(user_id: str, book: Book, chapter_index: int, use_prev_chapters: int) -> Dict[str, Any]:
+def build_chapter_context(
+    user_id: str,
+    book: Book,
+    chapter_index: int,
+    use_prev_chapters: int,
+    session_id: Optional[str] = None,
+    author_instruction: Optional[str] = None,
+) -> Dict[str, Any]:
     """Gather outline beats and a window of previous chapters to enforce continuity."""
     # Collect outline beat for this chapter and neighbors
     outline_beat = book.outline[chapter_index - 1] if 0 < chapter_index <= len(book.outline) else ""
@@ -185,15 +265,93 @@ def build_chapter_context(user_id: str, book: Book, chapter_index: int, use_prev
 
     # Previous chapters (compressed)
     prev_ctx: List[str] = []
-    if use_prev_chapters > 0:
-        prev = [c for c in CHAPTERS.values() if c.book_id == book.id and c.index < chapter_index]
-        prev = sorted(prev, key=lambda x: x.index)[-use_prev_chapters:]
-        for pc in prev:
-            prev_ctx.append(f"Chapitre {pc.index} — {pc.title}\n{compress_text_for_context(pc.content)}")
+    target_prev = max(use_prev_chapters, 0)
+    chapter_candidates = [
+        c for c in CHAPTERS.values() if c.book_id == book.id and c.index < chapter_index
+    ]
+    chapter_candidates = sorted(chapter_candidates, key=lambda x: x.index)
+    sequential_window = chapter_candidates[-target_prev:] if target_prev else []
+
+    summary_hint = SUMMARIES.get(session_id, "") if session_id else ""
+    query_parts = [
+        outline_beat or "",
+        author_instruction or "",
+        summary_hint or "",
+        " ".join(book.themes or []),
+        book.title or "",
+    ]
+    query_text = "\n".join([part for part in query_parts if part]).strip()
+    query_vec: Optional[np.ndarray] = None
+    if query_text:
+        try:
+            vec = np.asarray(embed(query_text), dtype=np.float32)
+            norm = np.linalg.norm(vec)
+            if np.isfinite(norm) and norm > 1e-9:
+                query_vec = vec / norm
+        except HTTPException:
+            query_vec = None
+
+    if target_prev and chapter_candidates:
+        seen_ids: set[str] = set()
+        selected_chapters: List[Chapter] = []
+        if sequential_window:
+            latest = sequential_window[-1]
+            selected_chapters.append(latest)
+            seen_ids.add(latest.id)
+
+        if query_vec is not None:
+            scored: List[Tuple[float, Chapter]] = []
+            for ch in chapter_candidates:
+                emb = np.asarray(CHAPTER_EMB.get(ch.id, []), dtype=np.float32)
+                if emb.ndim != 1 or emb.size == 0 or not np.all(np.isfinite(emb)):
+                    continue
+                denom = np.linalg.norm(emb)
+                if not np.isfinite(denom) or denom <= 1e-9:
+                    continue
+                emb = emb / denom
+                scored.append((float(np.dot(query_vec, emb)), ch))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            for _, ch in scored:
+                if ch.id in seen_ids:
+                    continue
+                selected_chapters.append(ch)
+                seen_ids.add(ch.id)
+                if len(selected_chapters) >= target_prev:
+                    break
+
+        if len(selected_chapters) < target_prev:
+            for ch in reversed(sequential_window):
+                if ch.id in seen_ids:
+                    continue
+                selected_chapters.append(ch)
+                seen_ids.add(ch.id)
+                if len(selected_chapters) >= target_prev:
+                    break
+
+        selected_chapters.sort(key=lambda x: x.index)
+        for ch in selected_chapters:
+            prev_ctx.append(
+                f"Chapitre {ch.index} — {ch.title}\n{compress_text_for_context(ch.content)}"
+            )
 
     # User-level long memories that might be relevant to the book
     mems = MEMORIES.get(user_id, [])
-    facts = "; ".join([m.text for m in mems[:5]])  # naive cap, could MMR on a synthetic query
+    mem_candidates = [m for m in mems if getattr(m, "embedding", None)]
+    selected_mems: List[MemoryItem] = []
+    if query_vec is not None and mem_candidates:
+        k_mem = min(settings.emb_top_k_author, len(mem_candidates))
+        selected_mems = mmr_select(
+            query_vec=query_vec,
+            candidates=mem_candidates,
+            k=k_mem,
+            lambda_mult=settings.mmr_lambda,
+        )
+    else:
+        selected_mems = mem_candidates[: settings.emb_top_k_author]
+
+    facts = ""
+    if selected_mems:
+        facts = "\n" + "\n".join(f"- {m.text}" for m in selected_mems)
 
     return {
         "outline_beat": outline_beat,
@@ -564,6 +722,10 @@ def build_context(
         "recent_messages": recent_msgs,
     }
 
+    rolling_summary = SUMMARIES.get(session_id)
+    if rolling_summary:
+        short_memory["rolling_summary"] = rolling_summary
+
     long_list = MEMORIES.get(user_id, [])
 
     used_recent_ids = [mid for mid, _ in MEMORY_USE_RECENCY.get(session_id, [])[-settings.cooldown_memory_messages:]]
@@ -616,12 +778,18 @@ def _build_common_ctx(ctx: ContextPackage, register: Optional[str]) -> dict:
     if raw_instr:
         raw_instructions = "Consignes de l'utilisateur:\n" + "\n".join(f"- {it}" for it in raw_instr[:8])
 
+    summary_block = ""
+    rolling_summary = ctx.short_memory.get("rolling_summary") if ctx.short_memory else None
+    if rolling_summary:
+        summary_block = "Résumé condensé des échanges précédents:\n" + rolling_summary
+
     space_time_hint = f"{snap.location} | {snap.season} | {snap.time_of_day} | {snap.weather} | facet:{snap.selected_facet}"
 
     # constraints will be filled from style
     return {
         "prefs_block": prefs_block,
         "raw_instructions": raw_instructions,
+        "summary_block": summary_block,
         "space_time_hint": space_time_hint,
         "register": register or "",
     }
@@ -655,7 +823,7 @@ def _render_output_rails(ctx: ContextPackage, register: Optional[str]) -> str:
 
 # app.py
 def render_system_prompt_conversation(ctx: ContextPackage, register: str, user_id: str) -> str:
-    pack = get_style_pack(PREFERENCES.get(user_id, {}).get("style_id") or settings.default_style_id)
+    pack = get_style_pack(get_current_style_id(user_id))
     base = _build_common_ctx(ctx, register)
     output_rails = _render_output_rails_from_style(pack, ctx, end_with_statement=(ctx.mode=="conversation" and register==ConvRegister.scene))
     common = {**base, "output_rails": output_rails}
@@ -664,7 +832,7 @@ def render_system_prompt_conversation(ctx: ContextPackage, register: str, user_i
 
 def render_system_prompt_author(ctx: ContextPackage, book: Book, chap_ctx: Dict[str, Any], user_id: str) -> str:
     # Use user-selected style (fallback to default)
-    pack = get_style_pack(PREFERENCES.get(user_id, {}).get("style_id") or settings.default_style_id)
+    pack = get_style_pack(get_current_style_id(user_id))
 
     base = _build_common_ctx(ctx, register=None)
 
@@ -868,7 +1036,14 @@ def chat(req: ChatRequest):
         next_index = (max(c.index for c in book_chapters) + 1) if book_chapters else 1
 
         # 2) Build chapter continuity context (uses previous chapters)
-        chap_ctx = build_chapter_context(req.user_id, book, next_index, use_prev_chapters=2)
+        chap_ctx = build_chapter_context(
+            req.user_id,
+            book,
+            next_index,
+            use_prev_chapters=2,
+            session_id=req.session_id,
+            author_instruction=raw_user_text,
+        )
 
         # 3) Build system prompt from author style pack
         sys = render_system_prompt_author(ctx, book, chap_ctx, req.user_id)
@@ -918,6 +1093,9 @@ def chat(req: ChatRequest):
 
     # persist assistant message
     CONVERSATIONS[req.session_id].append(Message(role="assistant", content=output, mode=user_mode))
+
+    # Refresh rolling summary for long sessions once a full turn is completed
+    maybe_refresh_summary(req.session_id)
 
     # mark facets & memory recency
     snap = SNAPSHOTS.get(req.session_id) or build_snapshot(req.session_id, None)
