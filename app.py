@@ -399,6 +399,9 @@ def mmr_select(query_vec: np.ndarray, candidates: List[MemoryItem], k: int, lamb
     valid_idx, valid_items, cand_vecs = [], [], []
     dim = None
     for i, m in enumerate(candidates):
+        if m.id in used_recent_ids:
+            logger.info("memory_skipped_recent", memory_id=m.id)
+            continue
         v = np.asarray(getattr(m, "embedding", []), dtype=np.float32)
         if v.ndim != 1 or v.size == 0 or not np.all(np.isfinite(v)):
             continue
@@ -435,13 +438,12 @@ def mmr_select(query_vec: np.ndarray, candidates: List[MemoryItem], k: int, lamb
         for i in range(len(valid_items)):
             if i in selected_local:
                 continue
-            penalty = -0.05 if valid_items[i].id in used_recent_ids else 0.0
             if selected_local:
                 # cosine == dot because vectors are unit-norm
                 max_sim = max(float(np.dot(cand_vecs[i], cand_vecs[j])) for j in selected_local)
             else:
                 max_sim = 0.0
-            score = lam * q_sims[i] - (1.0 - lam) * max_sim + penalty
+            score = lam * q_sims[i] - (1.0 - lam) * max_sim
             # deterministic tie-break: plus petit index
             if score > best_score or (score == best_score and i < best_i):
                 best_i, best_score = i, score
