@@ -8,6 +8,7 @@ from app import (
     AutoMemActionRequest,
     BOOKS,
     CONVERSATIONS,
+    SUMMARIES,
     INSTRUCTIONS,
     MEMORIES,
     MEMORY_USE_RECENCY,
@@ -44,6 +45,50 @@ from stores import CHAPTERS
 
 
 router = APIRouter(tags=["core"])
+
+
+@router.get("/api/conversations/{session_id}")
+def get_conversation(session_id: str, limit: int = 50, include_instructions: bool = False):
+    """Return the latest conversation messages for a session."""
+
+    if limit < 0:
+        raise HTTPException(status_code=400, detail="limit must be >= 0")
+
+    convo = CONVERSATIONS.get(session_id, [])
+
+    if not include_instructions:
+        convo = [m for m in convo if getattr(m, "mode", None) != "instruction"]
+
+    if limit and len(convo) > limit:
+        convo = convo[-limit:]
+
+    serialized = []
+    for msg in convo:
+        if hasattr(msg, "model_dump"):
+            data = msg.model_dump()
+        elif hasattr(msg, "dict"):
+            data = msg.dict()
+        else:
+            data = {
+                "role": getattr(msg, "role", ""),
+                "content": getattr(msg, "content", ""),
+                "ts": getattr(msg, "ts", None),
+                "mode": getattr(msg, "mode", None),
+            }
+        serialized.append(
+            {
+                "role": data.get("role"),
+                "content": data.get("content"),
+                "ts": data.get("ts"),
+                "mode": data.get("mode"),
+            }
+        )
+
+    return {
+        "ok": True,
+        "items": serialized,
+        "summary": SUMMARIES.get(session_id),
+    }
 
 
 @router.get("/api/memories/auto/pending")

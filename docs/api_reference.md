@@ -39,6 +39,13 @@ description: |
   - Persists responses, snapshots, facets and memory recency.
 - **Response**: `ChatResponse`.
 
+#### GET `/api/conversations/{session_id}`
+- **Purpose**: retrieve the recent messages for a session so the UI can rehydrate after a refresh.
+- **Query params**:
+  - `limit` (default: 50) — cap the number of returned messages (set to `0` for no cap).
+  - `include_instructions` (default: `false`) — include `>>` instruction turns when `true`.
+- **Response**: `{ "ok": true, "items": [{role, content, ts, mode}, ...], "summary": str|null }`.
+
 ### Auto-memories
 
 - **GET** `/api/memories/auto/pending?user_id=...`
