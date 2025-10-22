@@ -37,6 +37,20 @@ Les dépendances exactes sont listées dans [`requirements.txt`](requirements.tx
    ```bash
    uvicorn app:app --host 0.0.0.0 --port 8000
    ```
+5. Vérifiez rapidement que l'API répond :
+   ```bash
+   curl http://localhost:8000/api/health
+   ```
+   La réponse doit être un JSON indiquant `status: "ok"`.
+
+## Tests
+Un test unitaire couvre actuellement le calcul du *Maximal Marginal Relevance* (MMR).
+
+```bash
+pytest
+```
+
+Le démarrage d'Uvicorn n'est pas requis ; `pytest` s'appuie uniquement sur les fonctions pures définies dans `auto_memory.py`.
 
 ## Variables d'environnement
 - `OPENAI_API_KEY` *(obligatoire)* : clé API utilisée pour les appels chat & embeddings. L'application lève une exception si elle est absente.
@@ -70,6 +84,8 @@ Les dépendances exactes sont listées dans [`requirements.txt`](requirements.tx
 | `POST /api/chapters/{id}/edit` | Réécrit un chapitre via prompts guidés. |
 | `GET /api/health` | Vérification simple de disponibilité. |
 
+Des détails supplémentaires (schémas de requêtes/réponses, exemples complets) sont disponibles dans [`docs/api_reference.md`](docs/api_reference.md).
+
 ## Gestion de la mémoire & du style
 - **Mémoire courte** : reconstruction du contexte conversationnel et résumés rapides pour limiter la fenêtre de tokens tout en préservant la cohérence. Les messages sont stockés par session et reformatés avant envoi au modèle.
 - **Mémoire longue** : souvenirs semés manuellement ou capturés automatiquement, vectorisés pour récupération par similarité cosinus. Les chapitres enregistrés alimentent également la continuité du récit.
@@ -95,6 +111,6 @@ Ce dépôt illustre un POC fonctionnel pour prouver la viabilité du concept "bo
 ## Développement
 - Logging structuré via `structlog` (format JSON + timestamp ISO) dès le démarrage.
 - Pas de migrations : la structure est entièrement en mémoire.
-- Tests automatiques non fournis pour l'instant — utilisez des appels HTTP manuels ou des tests personnalisés selon vos besoins.
+- Tests existants exécutables via `pytest` (couvrant notamment le calcul MMR).
 
 Bon développement !
