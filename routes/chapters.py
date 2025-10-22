@@ -33,7 +33,14 @@ def edit_chapter(chapter_id: str, req: ChapterEditRequest):
         raise HTTPException(status_code=404, detail="book not found")
 
     # Build continuity context including the current chapter content
-    chap_ctx = build_chapter_context(req.user_id, book, ch.index, use_prev_chapters=2)
+    chap_ctx = build_chapter_context(
+        req.user_id,
+        book,
+        ch.index,
+        use_prev_chapters=2,
+        session_id=ch.book_id,
+        author_instruction=req.edit_instruction,
+    )
     chap_ctx["prev_chapters"].append(f"Chapitre {ch.index} (current) — {ch.title}\n{compress_text_for_context(ch.content)}")
 
     # Reuse rails

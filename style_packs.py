@@ -95,6 +95,7 @@ register_style(StylePack(
             "Cohérence discrète: {space_time_hint}\n"
             "{prefs_block}\n"
             "{raw_instructions}\n"
+            "{summary_block}\n"
             "{output_rails}"
         ),
         conversation_scene=(
@@ -113,6 +114,7 @@ register_style(StylePack(
             "Cohérence discrète: {space_time_hint}\n"
             "{prefs_block}\n"
             "{raw_instructions}\n"
+            "{summary_block}\n"
             "{output_rails}"
         ),
         author=(
@@ -131,6 +133,7 @@ register_style(StylePack(
             "Cohérence discrète avec lieu/saison/heure: {space_time_hint}\n"
             "{prefs_block}\n"
             "{raw_instructions}\n"
+            "{summary_block}\n"
             "{output_rails}"
         ),
         output_rails=(
