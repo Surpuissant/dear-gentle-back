@@ -92,6 +92,11 @@ class Settings(BaseModel):
 
 settings = Settings()
 
+
+class AutoMemActionRequest(BaseModel):
+    user_id: str
+    ids: List[str] = Field(default_factory=list)
+
 # ----------------------------
 # In-memory stores (replace with DB later)
 # ----------------------------
@@ -771,6 +776,39 @@ app.include_router(health_router)
 # ----------------------------
 # HTTP endpoints
 # ----------------------------
+
+
+@app.get("/api/memories/auto/pending")
+def get_auto_pending(user_id: str):
+    items = autom.list_pending(user_id)
+    logger.info("auto_mem_pending_list", user_id=user_id, count=len(items))
+    return {"ok": True, "items": [c.dict() for c in items]}
+
+
+@app.post("/api/memories/auto/accept")
+def post_auto_accept(req: AutoMemActionRequest):
+    result = autom.accept_pending(req.user_id, req.ids)
+    logger.info(
+        "auto_mem_pending_accept",
+        user_id=req.user_id,
+        requested_ids=req.ids,
+        accepted=result.get("accepted", 0),
+        accepted_ids=result.get("accepted_ids", []),
+    )
+    return result
+
+
+@app.post("/api/memories/auto/reject")
+def post_auto_reject(req: AutoMemActionRequest):
+    result = autom.reject_pending(req.user_id, req.ids)
+    logger.info(
+        "auto_mem_pending_reject",
+        user_id=req.user_id,
+        requested_ids=req.ids,
+        deleted=result.get("deleted", 0),
+    )
+    return result
+
 
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
