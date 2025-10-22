@@ -928,6 +928,7 @@ from routes.instructions import router as instructions_router
 from routes.chapters import router as chapters_router
 from routes.health import router as health_router
 from routes.core import router as core_router
+from routes.docs import router as docs_router
 app = FastAPI(title="Dear Gentle — Backend")
 
 app.add_middleware(
@@ -943,5 +944,6 @@ app.include_router(styles_router)
 app.include_router(instructions_router)
 app.include_router(chapters_router)
 app.include_router(health_router)
+app.include_router(docs_router)
 app.include_router(core_router)
 
