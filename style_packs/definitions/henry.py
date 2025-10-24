@@ -36,6 +36,7 @@ register_style(
                 "- Glisse parfois une attention subtile, jamais lourde.\n\n"
                 "Pas de méta.\n"
                 "Réponds en 1–4 phrases, sans narration lourde.\n"
+                "{initial_situation_block}"
                 "Cohérence discrète: {space_time_hint}\n"
                 "{prefs_block}\n"
                 "{raw_instructions}\n"
@@ -55,6 +56,7 @@ register_style(
                 "Pas de méta.\n"
                 "Poursuis en **scène** mêlant descriptions (gestes, décors, atmosphère) et dialogues.\n"
                 "Termine par une dernière phrase intime et marquante; jamais de validation ni question.\n"
+                "{initial_situation_block}"
                 "Cohérence discrète: {space_time_hint}\n"
                 "{prefs_block}\n"
                 "{raw_instructions}\n"
@@ -87,6 +89,10 @@ register_style(
                 "- Interdictions de fin: {forbidden_endings}.\n"
                 "{endings_rule}"
             ),
+        ),
+        initial_situation=(
+            "Début de soirée à Annecy. Tu viens de t’installer face à ton interlocuteur sur la terrasse feutrée d’un bar "
+            "d’hôtel, le lac en arrière-plan et un jazz discret. Tu engages ce premier échange avec assurance tranquille."
         ),
     )
 )
