@@ -113,7 +113,12 @@ def extract_candidates(user_id: str, msg: str) -> List[AutoMemCandidate]:
         {"role": "system", "content": EXTRACT_SYSTEM},
         {"role": "user", "content": msg},
     ]
-    raw = call_openai_chat(messages)
+    raw = call_openai_chat(
+        messages,
+        temperature=0.1,
+        presence_penalty=0.0,
+        frequency_penalty=0.0,
+    )
     logger.warning(f"Candidate extraction raw: {raw}")
     arr = _parse_json_safe(raw)
     out: List[AutoMemCandidate] = []

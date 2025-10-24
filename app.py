@@ -109,6 +109,7 @@ SUMMARY_STATE: Dict[str, Dict[str, Any]] = {}  # session_id -> {"last_turn": int
 PREFERENCES: Dict[str, Dict[str, str]] = {}  # user_id -> {key:value}
 MEMORIES: Dict[str, List[MemoryItem]] = {}  # user_id -> [MemoryItem]
 SNAPSHOTS: Dict[str, Snapshot] = {}  # session_id -> Snapshot
+SNAPSHOT_STATE: Dict[str, Dict[str, Any]] = {}  # session_id -> {overrides, last_generated, last_snapshot}
 MEMORY_USE_RECENCY: Dict[str, List[Tuple[str, float]]] = {}  # session_id -> [(mem_id, ts), ...]
 BOOKS: Dict[str, Book] = {}
 
@@ -603,6 +604,9 @@ def mark_facets_used(snapshot: Snapshot, session_id: str, used: List[str]) -> Sn
         records = [r for r in records if r.get("facet") != f]
         records.append({"facet": f, "ts": str(current_idx)})
     snapshot.last_mentioned_facets = records
+    state = _snapshot_state(session_id)
+    state["last_snapshot"] = snapshot
+    SNAPSHOTS[session_id] = snapshot
     return snapshot
 
 
@@ -705,31 +709,114 @@ def mmr_select(query_vec: np.ndarray, candidates: List[MemoryItem], k: int, lamb
 # Snapshot builder
 # ----------------------------
 
+SNAPSHOT_REFRESH_SECONDS = 15 * 60  # 15 minutes
+
+
+def _snapshot_state(session_id: str) -> Dict[str, Any]:
+    return SNAPSHOT_STATE.setdefault(
+        session_id,
+        {"overrides": None, "last_generated": None, "last_snapshot": None},
+    )
+
+
+def _default_weather_for_time(time_of_day: Optional[str]) -> Dict[str, str]:
+    mapping = {
+        "morning": "fresh_morning",
+        "afternoon": "soft_afternoon",
+        "evening": "mild_evening",
+        "night": "quiet_night",
+    }
+    return {"condition": mapping.get(time_of_day or "", "mild_evening")}
+
+
+def _default_contextual_facets(time_of_day: Optional[str]) -> List[str]:
+    base = {
+        "morning": ["terrasse ensoleillée au bord du lac"],
+        "afternoon": ["promenade le long du canal du Thiou"],
+        "evening": ["terrasse au bord du lac"],
+        "night": ["appartement cosy avec vue sur le lac"],
+    }
+    return base.get(time_of_day, ["terrasse au bord du lac"]).copy()
+
+
 def build_snapshot(session_id: str, override: Optional[Snapshot]) -> Snapshot:
     """Create/merge the snapshot and choose exactly one facet for this turn."""
-    snap = SNAPSHOTS.get(session_id)
-    if not snap:
-        d = paris_now()
-        snap = Snapshot(
-            location={"city": "Annecy", "country": "France"},
-            datetime_local_iso=d.isoformat(),
-            season=infer_season_from_date(d),
-            time_of_day=infer_time_of_day(d),
-            weather={"condition": "mild_evening"},
-            contextual_facets=["terrasse au bord du lac"],
-            cultural_refs=[]
-        )
+    state = _snapshot_state(session_id)
 
+    stored_override: Optional[Snapshot] = state.get("overrides")
     if override:
-        # Shallow merge; override takes precedence if fields are present
+        data = stored_override.dict(exclude_none=True) if stored_override else {}
+        data.update(override.dict(exclude_none=True))
+        stored_override = Snapshot(**data)
+        state["overrides"] = stored_override
+
+    now = paris_now()
+    last_generated = state.get("last_generated")
+    refresh_dynamic = True
+    if last_generated is not None:
+        try:
+            delta = (now - last_generated).total_seconds()
+        except TypeError:
+            # Fallback in case legacy state stored as str
+            delta = SNAPSHOT_REFRESH_SECONDS + 1
+        refresh_dynamic = delta >= SNAPSHOT_REFRESH_SECONDS
+
+    previous: Optional[Snapshot] = state.get("last_snapshot")
+
+    base_time_of_day = infer_time_of_day(now)
+    base_season = infer_season_from_date(now)
+
+    if refresh_dynamic or not previous:
+        time_of_day = base_time_of_day
+        season = base_season
+        weather = _default_weather_for_time(time_of_day)
+        contextual_facets = _default_contextual_facets(time_of_day)
+    else:
+        time_of_day = previous.time_of_day
+        season = previous.season
+        weather = previous.weather or _default_weather_for_time(previous.time_of_day)
+        contextual_facets = (previous.contextual_facets or [])[:]
+
+    last_mentioned = (previous.last_mentioned_facets or [])[:] if previous else []
+    cultural_refs = (previous.cultural_refs or [])[:] if previous else []
+
+    snap = Snapshot(
+        location={"city": "Annecy", "country": "France"},
+        datetime_local_iso=now.isoformat(),
+        season=season,
+        time_of_day=time_of_day,
+        weather=weather,
+        contextual_facets=contextual_facets,
+        last_mentioned_facets=last_mentioned,
+        cultural_refs=cultural_refs,
+    )
+
+    if stored_override:
         data = snap.dict()
-        for k, v in override.dict(exclude_none=True).items():
+        for k, v in stored_override.dict(exclude_none=True).items():
             data[k] = v
         snap = Snapshot(**data)
 
     chosen = schedule_facets(snap, session_id)
     snap.selected_facet = chosen[0] if chosen else None
+
+    state["last_generated"] = now
+    state["last_snapshot"] = snap
+    SNAPSHOTS[session_id] = snap
+
     return snap
+
+
+def apply_snapshot_override(session_id: str, snapshot: Snapshot) -> Snapshot:
+    """Persist user overrides then rebuild a fresh snapshot."""
+    state = _snapshot_state(session_id)
+    stored = state.get("overrides")
+    data = stored.dict(exclude_none=True) if isinstance(stored, Snapshot) else {}
+    data.update(snapshot.dict(exclude_none=True))
+    state["overrides"] = Snapshot(**data)
+    state["last_snapshot"] = None
+    state["last_generated"] = None
+    return build_snapshot(session_id, None)
 
 
 # ----------------------------
