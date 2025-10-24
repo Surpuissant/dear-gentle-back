@@ -453,7 +453,6 @@ def perform_chapter_edit(
     )
 
     sys = render_system_prompt_author(ctx, book, chap_ctx, user_id)
-    sys = sys + "\n\n" + render_system_prompt_conversation(ctx, ConvRegister.scene, user_id)
 
     edit_prompt = (
         "Réécris le chapitre selon les consignes suivantes (français) :\n"
