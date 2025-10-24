@@ -559,6 +559,15 @@ def detect_conv_register(user_text: str) -> str:
 # Facet scheduler (place/time/weather/context)
 # ----------------------------
 
+def _conversation_only_history(session_id: str) -> List[Message]:
+    """Return session history limited to conversational exchanges."""
+    return [
+        m
+        for m in CONVERSATIONS.get(session_id, [])
+        if getattr(m, "mode", None) in (None, "conversation")
+    ]
+
+
 def schedule_facets(snapshot: Snapshot, session_id: str) -> List[str]:
     """
     Choose up to max_facets_per_output facets (with cooldown).
@@ -576,19 +585,25 @@ def schedule_facets(snapshot: Snapshot, session_id: str) -> List[str]:
         candidates.append(("context", cf))
 
     # Cooldown check
-    last_map = {x["facet"]: x["ts"] for x in (snapshot.last_mentioned_facets or [])}
+    last_map: Dict[str, int] = {}
+    for rec in snapshot.last_mentioned_facets or []:
+        facet = rec.get("facet")
+        ts_raw = rec.get("ts")
+        if not facet:
+            continue
+        try:
+            last_map[facet] = int(ts_raw) if ts_raw is not None else 0
+        except (TypeError, ValueError):
+            continue
+
     allowed = []
-    recent_msgs = len(CONVERSATIONS.get(session_id, []))
+    recent_msgs = len(_conversation_only_history(session_id))
     for kind, facet in candidates:
         last_ts = last_map.get(facet)
         if last_ts is None:
             allowed.append(facet)
             continue
-        try:
-            last_idx = int(last_ts)
-        except:
-            last_idx = 0
-        if (recent_msgs - last_idx) >= settings.facet_cooldown_messages:
+        if (recent_msgs - last_ts) >= settings.facet_cooldown_messages:
             allowed.append(facet)
 
     return allowed[: settings.max_facets_per_output]
@@ -598,7 +613,7 @@ def mark_facets_used(snapshot: Snapshot, session_id: str, used: List[str]) -> Sn
     """Record facet usage as message-index pseudo-timestamps."""
     if not used:
         return snapshot
-    current_idx = len(CONVERSATIONS.get(session_id, []))
+    current_idx = len(_conversation_only_history(session_id))
     records = snapshot.last_mentioned_facets or []
     for f in used:
         records = [r for r in records if r.get("facet") != f]
