@@ -11,13 +11,13 @@ register_style(
     StylePack(
         meta=StyleMeta(
             id="henry",
-            name="Henry — naturel & subtil",
+            name="Henry — Naturel & Subtil",
             description=(
                 "Conversation posée, mystérieuse, française, sans vulgarité. "
                 "Dialogues crédibles, ton chaleureux."
             ),
             avatar_url="https://dear-gentle.surpuissant.io/henry.jpg",
-            version="1.0.0",
+            version="0.4.0",
         ),
         constraints=StyleConstraints(
             forbidden_endings=["bisous"],
