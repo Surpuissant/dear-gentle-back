@@ -14,8 +14,13 @@ class SelectStyleBody(BaseModel):
 
 @router.get("")
 def get_styles():
-    # Return list of style meta (id, name, description, avatar_url, version)
-    items = [m.dict() for m in list_style_meta()]
+    # Return list of style meta with initial situation details
+    items = []
+    for meta in list_style_meta():
+        pack = get_style_pack(meta.id)
+        item = meta.dict()
+        item["initial_situation"] = pack.initial_situation
+        items.append(item)
     return {"ok": True, "items": items}
 
 @router.get("/{style_id}")
@@ -27,6 +32,7 @@ def get_style(style_id: str):
             "meta": pack.meta.dict(),
             "constraints": pack.constraints.dict(),
             # Do not expose full templates by default (security/UX).
+            "initial_situation": pack.initial_situation,
         }
     }
 
