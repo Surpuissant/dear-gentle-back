@@ -57,6 +57,8 @@ class ContextPackage(BaseModel):
     snapshot: Snapshot
     short_memory: Dict[str, object]
     long_memory: Dict[str, object]  # {"facts":[{"id":..., "text":...}]}
+    initial_situation: Optional[str] = None
+    is_first_turn: bool = False
 
 
 class ChatRequest(BaseModel):

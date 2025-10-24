@@ -671,6 +671,7 @@ def build_context(
     """
 
     book = BOOKS.get(book_id)
+    style_pack = get_style_pack(get_current_style_id(user_id))
     prefs = PREFERENCES.get(user_id, {})
 
     active_instr = [i for i in INSTRUCTIONS.get(user_id, []) if i.active]
@@ -722,6 +723,13 @@ def build_context(
         "recent_messages": recent_msgs,
     }
 
+    is_first_turn = False
+    if not authorial_mode:
+        is_first_turn = not any(
+            m.role == "assistant" and getattr(m, "mode", None) in (None, "conversation")
+            for m in msgs_no_instr
+        )
+
     rolling_summary = SUMMARIES.get(session_id)
     if rolling_summary:
         short_memory["rolling_summary"] = rolling_summary
@@ -756,6 +764,8 @@ def build_context(
         snapshot=snapshot,
         short_memory=short_memory,
         long_memory={"facts": [{"id": m.id, "text": m.text} for m in selected_memories]},
+        initial_situation=style_pack.initial_situation if mode == "conversation" else None,
+        is_first_turn=is_first_turn,
     )
     used_mem_ids = [m.id for m in selected_memories]
     return ctx, used_facets, used_mem_ids
@@ -785,6 +795,15 @@ def _build_common_ctx(ctx: ContextPackage, register: Optional[str]) -> dict:
 
     space_time_hint = f"{snap.location} | {snap.season} | {snap.time_of_day} | {snap.weather} | facet:{snap.selected_facet}"
 
+    initial_situation_block = ""
+    initial_situation_value = ""
+    if getattr(ctx, "is_first_turn", False) and ctx.initial_situation:
+        initial_situation_block = (
+            "Situation initiale pour ce premier échange :\n"
+            f"{ctx.initial_situation}\n\n"
+        )
+        initial_situation_value = ctx.initial_situation
+
     # constraints will be filled from style
     return {
         "prefs_block": prefs_block,
@@ -792,6 +811,9 @@ def _build_common_ctx(ctx: ContextPackage, register: Optional[str]) -> dict:
         "summary_block": summary_block,
         "space_time_hint": space_time_hint,
         "register": register or "",
+        "initial_situation_block": initial_situation_block,
+        "initial_situation": initial_situation_value,
+        "is_first_turn": getattr(ctx, "is_first_turn", False),
     }
 
 def _render_output_rails_from_style(pack, ctx: ContextPackage, end_with_statement: bool) -> str:

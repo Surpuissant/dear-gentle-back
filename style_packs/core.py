@@ -40,6 +40,7 @@ class StylePack(BaseModel):
     meta: StyleMeta
     constraints: StyleConstraints
     templates: StyleTemplates
+    initial_situation: str | None = None
 
 
 class _SafeDict(defaultdict):
