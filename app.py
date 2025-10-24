@@ -416,6 +416,91 @@ def _persist_chapter_from_output(
 
 
 # ----------------------------
+# Chapter editing helper
+# ----------------------------
+
+def perform_chapter_edit(
+    chapter: Chapter,
+    user_id: str,
+    edit_instruction: str,
+) -> Tuple[Chapter, List[str], List[str]]:
+    """Shared logic to rewrite an existing chapter in place."""
+
+    book = BOOKS.get(chapter.book_id)
+    if not book:
+        raise HTTPException(status_code=404, detail="book not found")
+
+    # Build continuity context including the current chapter content
+    chap_ctx = build_chapter_context(
+        user_id,
+        book,
+        chapter.index,
+        use_prev_chapters=2,
+        session_id=chapter.book_id,
+        author_instruction=edit_instruction,
+    )
+    chap_ctx["prev_chapters"].append(
+        f"Chapitre {chapter.index} (current) — {chapter.title}\n{compress_text_for_context(chapter.content)}"
+    )
+
+    ctx, used_facets, used_mem_ids = build_context(
+        user_id=user_id,
+        session_id=chapter.book_id,
+        book_id=book.id,
+        user_text=edit_instruction,
+        mode="rewrite",
+        snapshot_override=None,
+    )
+
+    sys = render_system_prompt_author(ctx, book, chap_ctx, user_id)
+    sys = sys + "\n\n" + render_system_prompt_conversation(ctx, ConvRegister.scene, user_id)
+
+    edit_prompt = (
+        "Réécris le chapitre selon les consignes suivantes (français) :\n"
+        f"- {edit_instruction}\n"
+        "- Conserve la continuité, ne change pas les événements clés sauf si demandé.\n"
+        "- Garde une dernière ligne percutante; pas de question ni validation.\n"
+        "- Conserve/Améliore le titre (sobre).\n\n"
+        f"TEXTE ACTUEL:\n{compress_text_for_context(chapter.content, 3200)}\n"
+    )
+
+    messages = [{"role": "system", "content": sys}, {"role": "user", "content": edit_prompt}]
+    raw = call_openai_chat(messages)
+    out = raw.strip()
+
+    prev_ver = ChapterVersion(
+        id=str(uuid.uuid4()),
+        chapter_id=chapter.id,
+        title=chapter.title,
+        content=chapter.content,
+        notes="before-edit",
+    )
+    CHAPTER_VERSIONS.setdefault(chapter.id, []).append(prev_ver)
+
+    chapter.content = out
+    chapter.title = (out.splitlines()[0].strip() or chapter.title)
+    chapter.updated_at = time.time()
+    chapter.summary = summarize_chapter(chapter)
+
+    new_ver = ChapterVersion(
+        id=str(uuid.uuid4()),
+        chapter_id=chapter.id,
+        parent_version_id=prev_ver.id,
+        title=chapter.title,
+        content=chapter.content,
+        notes=edit_instruction,
+    )
+    CHAPTER_VERSIONS[chapter.id].append(new_ver)
+
+    try:
+        CHAPTER_EMB[chapter.id] = embed(chapter.content)
+    except HTTPException:
+        pass
+
+    return chapter, used_facets, used_mem_ids
+
+
+# ----------------------------
 # Mode detection
 # ----------------------------
 
@@ -883,14 +968,21 @@ def render_system_prompt_author(ctx: ContextPackage, book: Book, chap_ctx: Dict[
 # OpenAI call (robust)
 # ----------------------------
 
-def call_openai_chat(messages: List[Dict[str, str]], retries: int = 2) -> str:
+def call_openai_chat(
+    messages: List[Dict[str, str]],
+    retries: int = 2,
+    *,
+    temperature: float = 0.9,
+    presence_penalty: float = 0.4,
+    frequency_penalty: float = 0.4,
+) -> str:
     url = f"{OPENAI_BASE_URL}/chat/completions"
     payload = {
         "model": OPENAI_CHAT_MODEL,
         "messages": messages,
-        "temperature": 0.9,
-        "presence_penalty": 0.4,
-        "frequency_penalty": 0.4,
+        "temperature": temperature,
+        "presence_penalty": presence_penalty,
+        "frequency_penalty": frequency_penalty,
     }
     headers = build_openai_headers(OPENAI_API_KEY)
 

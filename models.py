@@ -1,6 +1,7 @@
 # /models.py
 import time
 from typing import Optional, Dict, List
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -143,3 +144,10 @@ class ChapterEditRequest(BaseModel):
     user_id: str
     chapter_id: str
     edit_instruction: str  # free text, e.g., "rends-le plus mystérieux, 10% plus court"
+
+
+class ChapterAuthoringIntent(BaseModel):
+    action: Literal["create", "edit"]
+    chapter_id: Optional[str] = None
+    chapter_index: Optional[int] = None
+    confidence: Optional[float] = None
