@@ -18,7 +18,7 @@ register_style(
                 "Esprit curieux, français contemporain, élégance discrète."
             ),
             avatar_url="https://dear-gentle.surpuissant.io/natalie.jpg",
-            version="1.0.0",
+            version="0.1.0",
         ),
         constraints=StyleConstraints(
             forbidden_endings=["bisous"],
