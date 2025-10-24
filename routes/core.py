@@ -16,6 +16,7 @@ from app import (
     MEMORY_USE_RECENCY,
     PREFERENCES,
     SNAPSHOTS,
+    apply_snapshot_override,
     autom,
     build_chapter_context,
     build_context,
@@ -460,8 +461,9 @@ def seed_memories(req: SeedMemoryRequest):
 
 @router.post("/api/snapshot/set")
 def set_snapshot(req: SetSnapshotRequest):
-    SNAPSHOTS[req.session_id] = req.snapshot
-    return {"ok": True}
+    snap = apply_snapshot_override(req.session_id, req.snapshot)
+    SNAPSHOTS[req.session_id] = snap
+    return {"ok": True, "snapshot": snap.dict()}
 
 
 @router.post("/api/book/upsert")
