@@ -9,6 +9,11 @@ Backend FastAPI qui alimente "Dear Gentle", un "book boyfriend" virtuel que l'on
 - **Ancrage spatio-temporel** : les messages prennent en compte les indications de l'utilisateur (heure, météo, ambiance). Le snapshot courant peut être mis à jour dynamiquement pour refléter le soir, la pluie ou tout autre contexte partagé.
 - **Chapitres romancés** : à tout moment, l'utilisateur peut convoquer l'"auteur" (un second mode LLM) pour transformer l'échange en chapitre. Les chapitres sont stockés, résumés et réinjectés pour nourrir la suite de l'histoire.
 
+### Compréhension des rôles
+- **Gentle** : c'est le personnage fictif qui répond pendant la conversation. Son identité et ses rails narratifs proviennent du *style pack* sélectionné (`style_packs/`), lequel fournit aussi les prompts système adaptés à chaque registre (`conversation_brevity`, `conversation_scene`, `author`, etc.). Dans le flux `POST /api/chat`, toutes les réponses produites avec `role="assistant"` sont traitées comme la voix du Gentle et réinjectées telles quelles dans l'historique.
+- **Utilisatrice / narratrice** : la personne réelle qui conduit l'histoire. Ses messages (`role="user"`) incarnent la narratrice, y compris lorsqu'on bascule en mode auteur. Avant de confier le récit à l'auteur, l'historique est reformatté pour rappeler explicitement cette voix — par exemple `Narratrice — …` dans la charge utile envoyée à l'auteur (`app.py`, fonctions `_label_author_history_line` et `_build_author_user_payload`).
+- **Auteur** : un second LLM n'est invoqué que lorsque le mode `author` ou `rewrite` est détecté. Il transforme les échanges précédents en chapitres tout en respectant les consignes de la narratrice et la personnalité du Gentle. Le backend l'assiste en lui fournissant un briefing structuré (légende des voix, souvenirs filtrés, instructions de style) afin d'éviter toute fusion entre la voix du personnage et celle de l'utilisatrice.
+
 ## Pile technique
 - **Python 3.11+**
 - **FastAPI** pour l'API HTTP
