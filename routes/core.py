@@ -300,12 +300,8 @@ def chat(req: ChatRequest):
         )
 
         target_chapter: Optional[Chapter] = None
-        # If the classifier does not provide an explicit confidence score we
-        # should assume it is uncertain. Previously we defaulted to 1.0, which
-        # meant any ambiguous "edit" response (without a score) was treated as a
-        # confident rewrite of an existing chapter.
         confidence = intent.confidence if intent.confidence is not None else 0.0
-        if intent.action == "edit" and confidence >= 0.5:
+        if intent.action == "edit" and confidence >= 0.70:
             target_chapter = _resolve_chapter_from_intent(intent, book_chapters)
             if target_chapter is None:
                 logger.info(
