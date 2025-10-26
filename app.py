@@ -967,6 +967,39 @@ def build_context(
 # ----------------------------
 
 # This is where we assemble the final system prompt from the style pack template + context pieces
+AUTHOR_HISTORY_LEGEND = (
+    "Repère des voix :\n"
+    "- Narratrice — voix de l'utilisatrice.\n"
+    "- Gentle — voix du personnage du style pack."
+)
+
+
+def _label_author_history_line(message: Dict[str, str]) -> str:
+    role = (message or {}).get("role")
+    if role == "assistant":
+        speaker = "Gentle"
+    else:
+        speaker = "Narratrice"
+    content = (message or {}).get("content") or ""
+    return f"{speaker} — {content}"
+
+
+def _build_author_user_payload(
+    history: List[Dict[str, str]], author_instruction: str
+) -> str:
+    digest_lines = [_label_author_history_line(msg) for msg in history][-18:]
+    payload_sections = [AUTHOR_HISTORY_LEGEND]
+
+    digest_block = "\n".join(digest_lines)
+    payload_sections.append(f"Contexte de conversation:\n{digest_block}".rstrip())
+
+    payload_sections.append(
+        "Consignes:\n" + (author_instruction.strip() if author_instruction else "")
+    )
+
+    return "\n\n".join(part for part in payload_sections if part).strip()
+
+
 def _build_common_ctx(ctx: ContextPackage, register: Optional[str]) -> dict:
     snap = ctx.snapshot
     instr = ctx.instructions

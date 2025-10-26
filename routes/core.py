@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, HTTPException
 
 from app import (
+    AUTHOR_HISTORY_LEGEND,
     AutoMemActionRequest,
     BOOKS,
     CONVERSATIONS,
@@ -16,6 +17,7 @@ from app import (
     MEMORY_USE_RECENCY,
     PREFERENCES,
     SNAPSHOTS,
+    _build_author_user_payload,
     apply_snapshot_override,
     autom,
     build_chapter_context,
@@ -24,6 +26,7 @@ from app import (
     call_openai_chat,
     detect_conv_register,
     detect_mode,
+    embed,
     logger,
     mark_facets_used,
     maybe_refresh_summary,
@@ -32,7 +35,6 @@ from app import (
     render_system_prompt_conversation,
     strip_mode_marker,
     _persist_chapter_from_output,
-    embed,
 )
 from models import (
     Book,
@@ -348,16 +350,8 @@ def chat(req: ChatRequest):
             messages.append({"role": "system", "content": sys})
 
             history = ctx.short_memory.get("recent_messages", [])
-            digest_lines = [
-                f"{m['role']}: {m['content']}" for m in history
-            ][-18:]
 
-            user_payload = (
-                "Contexte de conversation:\n"
-                + "\n".join(digest_lines)
-                + "\n\nConsignes:\n"
-                + raw_user_text.strip()
-            ).strip()
+            user_payload = _build_author_user_payload(history, raw_user_text)
 
             messages.append({"role": "user", "content": user_payload})
 
