@@ -300,8 +300,8 @@ def chat(req: ChatRequest):
         )
 
         target_chapter: Optional[Chapter] = None
-        confidence = intent.confidence if intent.confidence is not None else 1.0
-        if intent.action == "edit" and confidence >= 0.5:
+        confidence = intent.confidence if intent.confidence is not None else 0.0
+        if intent.action == "edit" and confidence >= 0.70:
             target_chapter = _resolve_chapter_from_intent(intent, book_chapters)
             if target_chapter is None:
                 logger.info(
