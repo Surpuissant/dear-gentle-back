@@ -565,6 +565,7 @@ def _conversation_only_history(session_id: str) -> List[Message]:
         m
         for m in CONVERSATIONS.get(session_id, [])
         if getattr(m, "mode", None) in (None, "conversation")
+        and m.role in {"user", "assistant"}
     ]
 
 
@@ -889,8 +890,13 @@ def build_context(
 
     msgs = CONVERSATIONS.get(session_id, [])
 
-    # Filtrer les ">>" du contexte
-    msgs_no_instr = [m for m in msgs if getattr(m, "mode", None) != "instruction"]
+    # Keep only true conversational exchanges for runtime context.
+    conversation_msgs = [
+        m
+        for m in msgs
+        if getattr(m, "mode", None) in (None, "conversation")
+        and m.role in {"user", "assistant"}
+    ]
 
     authorial_mode = mode in {"author", "rewrite"}
     if authorial_mode:
@@ -902,8 +908,10 @@ def build_context(
         k = settings.recent_messages_in_context_conversation
         top_k = settings.emb_top_k_conversation
 
-    # Derniers messages (sans instructions)
-    recent_msgs = [{"role": m.role, "content": m.content} for m in msgs_no_instr[-k:]]
+    # Derniers messages (exclusivement conversationnels)
+    recent_msgs = [
+        {"role": m.role, "content": m.content} for m in conversation_msgs[-k:]
+    ]
 
     short_memory = {
         "recent_messages": recent_msgs,
@@ -911,10 +919,7 @@ def build_context(
 
     is_first_turn = False
     if not authorial_mode:
-        is_first_turn = not any(
-            m.role == "assistant" and getattr(m, "mode", None) in (None, "conversation")
-            for m in msgs_no_instr
-        )
+        is_first_turn = not any(m.role == "assistant" for m in conversation_msgs)
 
     rolling_summary = SUMMARIES.get(session_id)
     if rolling_summary:
