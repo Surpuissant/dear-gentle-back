@@ -23,7 +23,7 @@ description: |
 | `SeedPrefRequest` | Set or remove user preferences. | `user_id`, `items[]` of `{key, value}` |
 | `SeedMemoryRequest` | Insert manual memory snippets. | `user_id`, `texts[]` |
 | `SetSnapshotRequest` | Replace the full session snapshot. | `session_id`, `snapshot` |
-| `Book` | Book metadata persisted for each user. | `id`, `user_id`, `title`, `outline`, `themes`, `style`, timestamps |
+| `Book` | Book metadata persisted for each user. | `id`, `user_id`, `title`, `themes`, `style`, timestamps |
 | `ChapterEditRequest` | Apply an instruction to rewrite a chapter. | `user_id`, `chapter_id`, `edit_instruction` |
 | `AutoMemActionRequest` | Accept or reject auto-captured memories. | `user_id`, `ids[]` |
 

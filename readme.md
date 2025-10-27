@@ -101,7 +101,7 @@ Des détails supplémentaires (schémas de requêtes/réponses, exemples complet
 ## Modes de conversation
 Le backend détecte automatiquement trois modes :
 - **Conversation** : réponses courtes ou scénarisées selon le registre détecté (bref / scène). Le gentleman incarne son style pack tout en tenant compte du snapshot spatio-temporel.
-- **Author** : génère et persiste un nouveau chapitre romanesque, en s'appuyant sur l'outline du livre, les chapitres précédents compressés et la mémoire longue (faits utilisateur + chapitres).
+- **Author** : génère et persiste un nouveau chapitre romanesque, en s'appuyant sur les chapitres précédents compressés et la mémoire longue (faits utilisateur + chapitres).
 - **Instruction (`>>`)** : enregistre des overrides persistants (consignes, contraintes) sans appeler l'API OpenAI.
 
 ## Persistance & limites actuelles
