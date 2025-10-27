@@ -1125,13 +1125,17 @@ def call_openai_chat(
     }
     headers = build_openai_headers(OPENAI_API_KEY)
 
+    logger.info("openai_chat_request", payload=payload)
+
     last_err = None
     for i in range(retries + 1):
         try:
             r = requests.post(url, json=payload, headers=headers, timeout=60)
             if r.status_code == 200:
                 data = r.json()
-                return data["choices"][0]["message"]["content"]
+                content = data["choices"][0]["message"]["content"]
+                logger.info("openai_chat_response", content=content)
+                return content
             # capture corps d'erreur lisible
             try:
                 err_json = r.json()
