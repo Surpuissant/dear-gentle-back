@@ -11,7 +11,7 @@ register_style(
     StylePack(
         meta=StyleMeta(
             id="henry",
-            name="Henry — Présence magnétique & sincérité",
+            name="Henry",
             description=(
                 "Conversation profondément attentive, poétique sans affectation, "
                 "où chaque échange paraît essentiel et respiré."
