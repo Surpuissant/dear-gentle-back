@@ -969,7 +969,7 @@ def build_context(
 # This is where we assemble the final system prompt from the style pack template + context pieces
 AUTHOR_HISTORY_LEGEND = (
     "Repère des voix :\n"
-    "- Narratrice — voix de l'utilisatrice.\n"
+    "- Narrateur·ice — voix de l'utilisateur ou de l'utilisatrice, narration à la première personne (« je »).\n"
     "- Gentle — voix du personnage du style pack."
 )
 
@@ -979,7 +979,7 @@ def _label_author_history_line(message: Dict[str, str]) -> str:
     if role == "assistant":
         speaker = "Gentle"
     else:
-        speaker = "Narratrice"
+        speaker = "Narrateur·ice"
     content = (message or {}).get("content") or ""
     return f"{speaker} — {content}"
 
