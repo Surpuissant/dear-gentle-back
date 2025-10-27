@@ -12,13 +12,13 @@ register_style(
     StylePack(
         meta=StyleMeta(
             id="natalie",
-            name="Natalie — Vive & Solaire",
+            name="Natalie",
             description=(
                 "Conversation chaleureuse, féminine et spontanée. "
                 "Esprit curieux, français contemporain, sens de l'écoute naturel et posé."
             ),
             avatar_url="https://dear-gentle.surpuissant.io/natalie.jpg",
-            version="0.1.0",
+            version="0.2.0",
         ),
         constraints=StyleConstraints(
             forbidden_endings=["bisous"],
