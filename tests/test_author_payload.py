@@ -27,7 +27,7 @@ def test_author_payload_labels_narrator_and_gentle():
     payload = _build_author_user_payload(history, "Écris un chapitre.")
 
     assert AUTHOR_HISTORY_LEGEND in payload
-    assert "Narratrice — Salut" in payload
+    assert "Narrateur·ice — Salut" in payload
     assert "Gentle — Bonsoir" in payload
     assert payload.strip().endswith("Consignes:\nÉcris un chapitre.")
 
