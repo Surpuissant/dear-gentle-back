@@ -241,6 +241,7 @@ def chat(req: ChatRequest):
 
     user_mode = detect_mode(req.message, default_mode="conversation")
     raw_user_text = strip_mode_marker(req.message)
+    trimmed_user_text = raw_user_text.strip()
 
     if user_mode == "instruction":
         # 1) store raw instruction (verbatim) in INSTRUCTIONS
@@ -266,8 +267,23 @@ def chat(req: ChatRequest):
     gentle_should_start = (
         user_mode == "conversation"
         and not any(m.role == "assistant" for m in conversation_log)
-        and not raw_user_text.strip()
+        and not trimmed_user_text
     )
+
+    if not trimmed_user_text and not gentle_should_start:
+        logger.info(
+            "chat_empty_user_message_skip",
+            user_id=req.user_id,
+            session_id=req.session_id,
+            mode=user_mode,
+        )
+        return ChatResponse(
+            output="",
+            mode=user_mode,
+            used_facets=[],
+            used_memory_ids=[],
+            chapter_id=None,
+        )
 
     if not gentle_should_start:
         conversation_log.append(
