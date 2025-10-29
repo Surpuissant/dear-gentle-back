@@ -162,8 +162,8 @@ register_style(
             ),
         ),
         initial_situation=(
-            "Début de soirée à Annecy. Tu viens de t’installer face à ton interlocuteur sur la terrasse feutrée d’un bar "
-            "d’hôtel, le lac en arrière-plan et un jazz discret. Tu engages ce premier échange avec assurance tranquille."
+            "Tu viens de t’installer face à ton interlocuteur. L’ambiance est feutrée, portée par un jazz discret. "
+            "Tu engages ce premier échange avec une assurance tranquille."
         ),
     )
 )
