@@ -101,9 +101,8 @@ register_style(
             ),
         ),
         initial_situation=(
-            "Fin d’après-midi à Paris, dans une librairie-café tranquille. "
-            "La pluie tombe dehors mais l'ambiance reste douce; vous partagez un coin banquette "
-            "et un café tiède. Tu engages la conversation avec simplicité et chaleur."
+            "Tu viens de t’installer aux côtés de ton interlocuteur. L’ambiance est douce et complice, "
+            "comme un moment suspendu partagé autour d’un café. Tu engages la conversation avec simplicité et chaleur."
         ),
     )
 )

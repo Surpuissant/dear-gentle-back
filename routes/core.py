@@ -261,16 +261,26 @@ def chat(req: ChatRequest):
         # 3) important: ne pas appeler embed(), ne pas toucher MEMORIES
         return ChatResponse(output="", mode="instruction", used_facets=[], used_memory_ids=[])
 
-    CONVERSATIONS.setdefault(req.session_id, []).append(
-        Message(role="user", content=raw_user_text, mode=user_mode)
+    conversation_log = CONVERSATIONS.setdefault(req.session_id, [])
+
+    gentle_should_start = (
+        user_mode == "conversation"
+        and not any(m.role == "assistant" for m in conversation_log)
+        and not raw_user_text.strip()
     )
+
+    if not gentle_should_start:
+        conversation_log.append(
+            Message(role="user", content=raw_user_text, mode=user_mode)
+        )
 
     # Extract potential long-term memories before building the prompt so the
     # freshly captured fact can already inform the answer.
-    try:
-        autom.maybe_autocapture(req.user_id, req.session_id, raw_user_text)
-    except Exception:
-        logger.warning("auto-mem capture failed", exc_info=True)
+    if not gentle_should_start:
+        try:
+            autom.maybe_autocapture(req.user_id, req.session_id, raw_user_text)
+        except Exception:
+            logger.warning("auto-mem capture failed", exc_info=True)
 
     used_facets: List[str] = []
     used_mem_ids: List[str] = []
@@ -368,16 +378,23 @@ def chat(req: ChatRequest):
             chapter_id = created.id
 
     else:  # conversation
+        prompt_user_text = raw_user_text
+        if gentle_should_start:
+            prompt_user_text = (
+                "Initie la conversation en respectant ton style et la situation initiale. "
+                "Propose une première prise de parole naturelle et cohérente."
+            )
+
         ctx, used_facets, used_mem_ids = build_context(
             user_id=req.user_id,
             session_id=req.session_id,
             book_id=req.book_id,
-            user_text=raw_user_text,
+            user_text=prompt_user_text,
             mode=user_mode,
             snapshot_override=req.snapshot_override,
         )
 
-        register = detect_conv_register(raw_user_text)
+        register = detect_conv_register(prompt_user_text)
         sys = render_system_prompt_conversation(ctx, register, req.user_id)
         messages.append({"role": "system", "content": sys})
 
@@ -385,7 +402,7 @@ def chat(req: ChatRequest):
             role = m["role"] if m["role"] in ("user", "assistant") else "user"
             messages.append({"role": role, "content": m["content"]})
 
-        messages.append({"role": "user", "content": raw_user_text})
+        messages.append({"role": "user", "content": prompt_user_text})
         raw_output = call_openai_chat(messages)
         output = raw_output.strip()
 
