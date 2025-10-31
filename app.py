@@ -1180,7 +1180,7 @@ autom.MEMORY_USE_RECENCY = MEMORY_USE_RECENCY
 # ----------------------------
 # FastAPI app
 # ----------------------------
-from routes.styles import router as styles_router
+from routes.styles import router as styles_router, lab_router as styles_lab_router
 from routes.instructions import router as instructions_router
 from routes.chapters import router as chapters_router
 from routes.health import router as health_router
@@ -1198,6 +1198,7 @@ app.add_middleware(
 
 # Register styles routes
 app.include_router(styles_router)
+app.include_router(styles_lab_router)
 app.include_router(instructions_router)
 app.include_router(chapters_router)
 app.include_router(health_router)

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Style Packs Lab</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.4/dist/tailwind.min.css"
+    />
+  </head>
+  <body class="bg-slate-950 text-slate-100 min-h-screen">
+    <div class="max-w-5xl mx-auto py-10 px-4 space-y-6">
+      <header class="space-y-2">
+        <h1 class="text-3xl font-semibold">Style Packs Lab</h1>
+        <p class="text-slate-300">
+          Modifie les personas directement en RAM. Toute sauvegarde est immédiate mais non
+          persistante.
+        </p>
+      </header>
+
+      <section class="bg-slate-900/70 border border-slate-800 rounded-lg p-4 space-y-3">
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="text-sm uppercase tracking-wide text-slate-400" for="style-select">
+            Style actuel
+          </label>
+          <select id="style-select" class="bg-slate-800 border border-slate-700 rounded px-3 py-2 grow md:grow-0"></select>
+          <button id="new-style" class="px-3 py-2 text-sm font-medium bg-emerald-500 text-emerald-950 rounded hover:bg-emerald-400 transition">
+            Nouveau style
+          </button>
+        </div>
+        <p id="status" class="text-sm text-slate-400"></p>
+      </section>
+
+      <form id="style-form" class="space-y-8">
+        <div class="grid md:grid-cols-2 gap-6">
+          <div class="space-y-3">
+            <h2 class="text-xl font-semibold">Meta</h2>
+            <label class="block text-sm font-medium text-slate-300">
+              Identifiant
+              <input id="meta-id" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" placeholder="henry" />
+            </label>
+            <label class="block text-sm font-medium text-slate-300">
+              Nom
+              <input id="meta-name" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" />
+            </label>
+            <label class="block text-sm font-medium text-slate-300">
+              Description
+              <textarea id="meta-description" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-28"></textarea>
+            </label>
+            <label class="block text-sm font-medium text-slate-300">
+              Avatar URL
+              <input id="meta-avatar" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" placeholder="https://..." />
+            </label>
+            <label class="block text-sm font-medium text-slate-300">
+              Version
+              <input id="meta-version" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" placeholder="1.0.0" />
+            </label>
+          </div>
+
+          <div class="space-y-3">
+            <h2 class="text-xl font-semibold">Contraintes</h2>
+            <label class="block text-sm font-medium text-slate-300">
+              Emoji quota
+              <input id="constraints-emoji" type="number" min="0" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" />
+            </label>
+            <label class="block text-sm font-medium text-slate-300">
+              Forbidden endings (séparés par des virgules)
+              <input id="constraints-endings" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" placeholder="bisous, bisous !" />
+            </label>
+
+            <h2 class="text-xl font-semibold">Situation initiale</h2>
+            <textarea id="initial-situation" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-40"></textarea>
+          </div>
+        </div>
+
+        <div class="space-y-4">
+          <h2 class="text-xl font-semibold">Templates</h2>
+          <div class="grid md:grid-cols-2 gap-6">
+            <label class="block text-sm font-medium text-slate-300">
+              Conversation (version courte)
+              <textarea id="tpl-conversation-brevity" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-48"></textarea>
+            </label>
+            <label class="block text-sm font-medium text-slate-300">
+              Conversation (scène)
+              <textarea id="tpl-conversation-scene" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-48"></textarea>
+            </label>
+            <label class="block text-sm font-medium text-slate-300">
+              Auteur
+              <textarea id="tpl-author" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-48"></textarea>
+            </label>
+            <label class="block text-sm font-medium text-slate-300">
+              Output rails
+              <textarea id="tpl-output-rails" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-48"></textarea>
+            </label>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap gap-3">
+          <button type="submit" class="px-4 py-2 bg-emerald-500 text-emerald-950 font-semibold rounded hover:bg-emerald-400 transition">
+            Sauvegarder en RAM
+          </button>
+          <button id="copy-json" type="button" class="px-4 py-2 bg-slate-800 border border-slate-700 rounded hover:bg-slate-700 transition">
+            Copier le JSON
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $("status");
+      const selectEl = $("style-select");
+      let stylesCache = [];
+
+      function setStatus(msg, tone = "info") {
+        const tones = {
+          info: "text-slate-400",
+          success: "text-emerald-400",
+          error: "text-rose-400",
+        };
+        statusEl.textContent = msg || "";
+        statusEl.className = `text-sm ${tones[tone] || tones.info}`;
+      }
+
+      function parseForbidden(str) {
+        if (!str.trim()) return [];
+        return str
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+
+      function stringifyForbidden(values) {
+        return (values || []).join(", ");
+      }
+
+      function hydrateForm(pack) {
+        $("meta-id").value = pack.meta?.id || "";
+        $("meta-name").value = pack.meta?.name || "";
+        $("meta-description").value = pack.meta?.description || "";
+        $("meta-avatar").value = pack.meta?.avatar_url || "";
+        $("meta-version").value = pack.meta?.version || "";
+        $("constraints-emoji").value = pack.constraints?.emoji_quota ?? 1;
+        $("constraints-endings").value = stringifyForbidden(pack.constraints?.forbidden_endings);
+        $("initial-situation").value = pack.initial_situation || "";
+        $("tpl-conversation-brevity").value = pack.templates?.conversation_brevity || "";
+        $("tpl-conversation-scene").value = pack.templates?.conversation_scene || "";
+        $("tpl-author").value = pack.templates?.author || "";
+        $("tpl-output-rails").value = pack.templates?.output_rails || "";
+      }
+
+      function collectForm() {
+        return {
+          meta: {
+            id: $("meta-id").value.trim(),
+            name: $("meta-name").value.trim(),
+            description: $("meta-description").value.trim(),
+            avatar_url: $("meta-avatar").value.trim() || null,
+            version: $("meta-version").value.trim() || "1.0.0",
+          },
+          constraints: {
+            emoji_quota: Number($("constraints-emoji").value || 0),
+            forbidden_endings: parseForbidden($("constraints-endings").value || ""),
+          },
+          templates: {
+            conversation_brevity: $("tpl-conversation-brevity").value,
+            conversation_scene: $("tpl-conversation-scene").value,
+            author: $("tpl-author").value,
+            output_rails: $("tpl-output-rails").value,
+          },
+          initial_situation: $("initial-situation").value || null,
+        };
+      }
+
+      async function loadStyles(selectedId) {
+        const res = await fetch("/api/styles");
+        const data = await res.json();
+        stylesCache = data.items || [];
+        selectEl.innerHTML = "";
+        const placeholder = document.createElement("option");
+        placeholder.textContent = "Choisir un style";
+        placeholder.value = "";
+        selectEl.appendChild(placeholder);
+        stylesCache.forEach((meta) => {
+          const option = document.createElement("option");
+          option.value = meta.id;
+          option.textContent = `${meta.name} (${meta.id})`;
+          if (meta.id === selectedId) option.selected = true;
+          selectEl.appendChild(option);
+        });
+      }
+
+      async function loadStyleDetails(styleId) {
+        if (!styleId) {
+          hydrateForm({ meta: {}, constraints: {}, templates: {} });
+          return;
+        }
+        setStatus("Chargement…");
+        const res = await fetch(`/api/styles/${encodeURIComponent(styleId)}/raw`);
+        if (!res.ok) {
+          setStatus("Impossible de charger ce style", "error");
+          return;
+        }
+        const data = await res.json();
+        hydrateForm(data.item || {});
+        setStatus("Style chargé", "success");
+      }
+
+      $("style-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = collectForm();
+        if (!payload.meta.id) {
+          setStatus("L'identifiant du style est obligatoire", "error");
+          return;
+        }
+        setStatus("Sauvegarde…");
+        const res = await fetch(`/api/styles/${encodeURIComponent(payload.meta.id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const error = await res.json().catch(() => ({}));
+          setStatus(error.detail || "Erreur pendant la sauvegarde", "error");
+          return;
+        }
+        await loadStyles(payload.meta.id);
+        setStatus("Sauvegardé !", "success");
+      });
+
+      $("copy-json").addEventListener("click", async () => {
+        const payload = collectForm();
+        await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+        setStatus("JSON copié dans le presse-papiers", "success");
+      });
+
+      selectEl.addEventListener("change", (event) => {
+        loadStyleDetails(event.target.value);
+      });
+
+      $("new-style").addEventListener("click", (event) => {
+        event.preventDefault();
+        selectEl.value = "";
+        hydrateForm({ meta: {}, constraints: { emoji_quota: 1, forbidden_endings: [] }, templates: {} });
+        setStatus("Nouveau style en brouillon", "info");
+      });
+
+      loadStyles();
+      hydrateForm({ meta: {}, constraints: { emoji_quota: 1, forbidden_endings: [] }, templates: {} });
+    </script>
+  </body>
+</html>
