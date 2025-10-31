@@ -29,11 +29,16 @@
           </div>
           <button
             id="new-style"
+            title="Vider le formulaire pour créer un nouveau style"
             class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/80 bg-emerald-500 text-emerald-950 px-3 py-2 text-sm font-semibold shadow-sm shadow-emerald-500/20 transition hover:-translate-y-[1px] hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-300"
           >
             Nouveau style
           </button>
         </div>
+        <p class="text-xs text-slate-400">
+          Choisis un style existant ou clique sur «&nbsp;Nouveau style&nbsp;» pour repartir d'une page blanche. Renseigne
+          ensuite un identifiant unique puis sauvegarde pour l'ajouter à la liste.
+        </p>
         <p id="status" class="text-sm text-slate-400 min-h-[1.25rem]"></p>
       </section>
 
@@ -201,6 +206,7 @@
       const $ = (id) => document.getElementById(id);
       const statusEl = $("status");
       const selectEl = $("style-select");
+      const metaIdInput = $("meta-id");
       let stylesCache = [];
 
       function setStatus(msg, tone = "info") {
@@ -367,9 +373,14 @@
 
       $("new-style").addEventListener("click", (event) => {
         event.preventDefault();
-        selectEl.value = "";
-        hydrateForm({ meta: {}, constraints: { emoji_quota: 1, forbidden_endings: [] }, templates: {} });
-        setStatus("Nouveau style en brouillon", "info");
+        selectEl.selectedIndex = 0;
+        const blank = { meta: {}, constraints: { emoji_quota: 1, forbidden_endings: [] }, templates: {} };
+        hydrateForm(blank);
+        metaIdInput.focus();
+        setStatus(
+          "Formulaire vierge. Renseigne un identifiant unique puis clique sur «\u00a0Sauvegarder en RAM\u00a0» pour créer le style.",
+          "info",
+        );
       });
 
       loadStyles();
