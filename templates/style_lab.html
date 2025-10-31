@@ -4,103 +4,193 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Style Packs Lab</title>
-    <link
-      rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.4/dist/tailwind.min.css"
-    />
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
   </head>
   <body class="bg-slate-950 text-slate-100 min-h-screen">
-    <div class="max-w-5xl mx-auto py-10 px-4 space-y-6">
+    <div class="max-w-6xl mx-auto py-12 px-4 lg:px-8 space-y-8">
       <header class="space-y-2">
-        <h1 class="text-3xl font-semibold">Style Packs Lab</h1>
-        <p class="text-slate-300">
+        <h1 class="text-3xl font-semibold tracking-tight">Style Packs Lab</h1>
+        <p class="text-slate-300 max-w-3xl">
           Modifie les personas directement en RAM. Toute sauvegarde est immédiate mais non
           persistante.
         </p>
       </header>
 
-      <section class="bg-slate-900/70 border border-slate-800 rounded-lg p-4 space-y-3">
-        <div class="flex flex-wrap items-center gap-3">
-          <label class="text-sm uppercase tracking-wide text-slate-400" for="style-select">
-            Style actuel
-          </label>
-          <select id="style-select" class="bg-slate-800 border border-slate-700 rounded px-3 py-2 grow md:grow-0"></select>
-          <button id="new-style" class="px-3 py-2 text-sm font-medium bg-emerald-500 text-emerald-950 rounded hover:bg-emerald-400 transition">
+      <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-5 shadow-lg shadow-slate-950/40 space-y-4">
+        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div class="space-y-1">
+            <label class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400" for="style-select">
+              Style en cours d'édition
+            </label>
+            <select
+              id="style-select"
+              class="w-full md:w-80 bg-slate-950/70 border border-slate-700/80 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70 focus:border-emerald-400/70 transition"
+            ></select>
+          </div>
+          <button
+            id="new-style"
+            class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/80 bg-emerald-500 text-emerald-950 px-3 py-2 text-sm font-semibold shadow-sm shadow-emerald-500/20 transition hover:-translate-y-[1px] hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+          >
             Nouveau style
           </button>
         </div>
-        <p id="status" class="text-sm text-slate-400"></p>
+        <p id="status" class="text-sm text-slate-400 min-h-[1.25rem]"></p>
       </section>
 
-      <form id="style-form" class="space-y-8">
-        <div class="grid md:grid-cols-2 gap-6">
-          <div class="space-y-3">
-            <h2 class="text-xl font-semibold">Meta</h2>
-            <label class="block text-sm font-medium text-slate-300">
-              Identifiant
-              <input id="meta-id" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" placeholder="henry" />
-            </label>
-            <label class="block text-sm font-medium text-slate-300">
-              Nom
-              <input id="meta-name" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" />
-            </label>
-            <label class="block text-sm font-medium text-slate-300">
-              Description
-              <textarea id="meta-description" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-28"></textarea>
-            </label>
-            <label class="block text-sm font-medium text-slate-300">
-              Avatar URL
-              <input id="meta-avatar" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" placeholder="https://..." />
-            </label>
-            <label class="block text-sm font-medium text-slate-300">
-              Version
-              <input id="meta-version" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" placeholder="1.0.0" />
+      <form id="style-form" class="space-y-10">
+        <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-6 shadow-lg shadow-slate-950/30">
+          <div class="flex items-center justify-between gap-4">
+            <h2 class="text-xl font-semibold tracking-tight">Métadonnées</h2>
+            <p class="text-xs text-slate-400">
+              Identité, présentation et versionnage du style pack.
+            </p>
+          </div>
+          <div class="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div class="space-y-5">
+              <div class="grid gap-4 md:grid-cols-2">
+                <label class="block text-sm font-medium text-slate-200">
+                  Identifiant unique
+                  <input
+                    id="meta-id"
+                    class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                    placeholder="henry"
+                  />
+                  <span class="mt-1 block text-xs text-slate-400">Utilisé pour appeler le style via l'API.</span>
+                </label>
+                <label class="block text-sm font-medium text-slate-200">
+                  Nom marketing
+                  <input
+                    id="meta-name"
+                    class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  />
+                  <span class="mt-1 block text-xs text-slate-400">Affiché dans les interfaces.</span>
+                </label>
+              </div>
+              <label class="block text-sm font-medium text-slate-200">
+                Description
+                <textarea
+                  id="meta-description"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  rows="4"
+                ></textarea>
+              </label>
+            </div>
+            <div class="space-y-5">
+              <label class="block text-sm font-medium text-slate-200">
+                Avatar (URL)
+                <input
+                  id="meta-avatar"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  placeholder="https://cdn..."
+                />
+              </label>
+              <label class="block text-sm font-medium text-slate-200">
+                Version
+                <input
+                  id="meta-version"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  placeholder="1.0.0"
+                />
+                <span class="mt-1 block text-xs text-slate-400">Aidez-vous du SemVer pour suivre les évolutions.</span>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-6 shadow-lg shadow-slate-950/30">
+          <div class="flex items-center justify-between gap-4">
+            <h2 class="text-xl font-semibold tracking-tight">Contraintes &amp; situation</h2>
+            <p class="text-xs text-slate-400">
+              Paramètres qui guident la tonalité et l'accroche initiale.
+            </p>
+          </div>
+          <div class="grid gap-6 lg:grid-cols-2">
+            <div class="space-y-5">
+              <label class="block text-sm font-medium text-slate-200">
+                Quota d'emoji maximum
+                <input
+                  id="constraints-emoji"
+                  type="number"
+                  min="0"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                />
+                <span class="mt-1 block text-xs text-slate-400">Contrôle la dose d'expressivité.</span>
+              </label>
+              <label class="block text-sm font-medium text-slate-200">
+                Fins interdites
+                <input
+                  id="constraints-endings"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  placeholder="bisous, bisous !"
+                />
+                <span class="mt-1 block text-xs text-slate-400">Séparez les entrées par des virgules.</span>
+              </label>
+            </div>
+            <label class="block text-sm font-medium text-slate-200">
+              Situation initiale
+              <textarea
+                id="initial-situation"
+                class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                rows="8"
+              ></textarea>
+              <span class="mt-1 block text-xs text-slate-400">Décrivez la scène de départ qui inspire le ton.</span>
             </label>
           </div>
+        </section>
 
-          <div class="space-y-3">
-            <h2 class="text-xl font-semibold">Contraintes</h2>
-            <label class="block text-sm font-medium text-slate-300">
-              Emoji quota
-              <input id="constraints-emoji" type="number" min="0" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" />
-            </label>
-            <label class="block text-sm font-medium text-slate-300">
-              Forbidden endings (séparés par des virgules)
-              <input id="constraints-endings" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2" placeholder="bisous, bisous !" />
-            </label>
-
-            <h2 class="text-xl font-semibold">Situation initiale</h2>
-            <textarea id="initial-situation" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-40"></textarea>
+        <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-6 shadow-lg shadow-slate-950/30">
+          <div class="flex items-center justify-between gap-4">
+            <h2 class="text-xl font-semibold tracking-tight">Templates</h2>
+            <p class="text-xs text-slate-400">Prompts longs, optimisés pour le LLM.</p>
           </div>
-        </div>
-
-        <div class="space-y-4">
-          <h2 class="text-xl font-semibold">Templates</h2>
-          <div class="grid md:grid-cols-2 gap-6">
-            <label class="block text-sm font-medium text-slate-300">
-              Conversation (version courte)
-              <textarea id="tpl-conversation-brevity" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-48"></textarea>
+          <div class="grid gap-6 lg:grid-cols-2">
+            <label class="flex flex-col gap-2 text-sm font-medium text-slate-200">
+              Conversation courte
+              <textarea
+                id="tpl-conversation-brevity"
+                class="min-h-56 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+              ></textarea>
+              <span class="text-xs text-slate-400">Utilisé pour des réponses rapides.</span>
             </label>
-            <label class="block text-sm font-medium text-slate-300">
-              Conversation (scène)
-              <textarea id="tpl-conversation-scene" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-48"></textarea>
+            <label class="flex flex-col gap-2 text-sm font-medium text-slate-200">
+              Conversation scène
+              <textarea
+                id="tpl-conversation-scene"
+                class="min-h-56 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+              ></textarea>
+              <span class="text-xs text-slate-400">Narration détaillée de la scène.</span>
             </label>
-            <label class="block text-sm font-medium text-slate-300">
+            <label class="flex flex-col gap-2 text-sm font-medium text-slate-200">
               Auteur
-              <textarea id="tpl-author" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-48"></textarea>
+              <textarea
+                id="tpl-author"
+                class="min-h-56 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+              ></textarea>
+              <span class="text-xs text-slate-400">Signature rédactionnelle du personnage.</span>
             </label>
-            <label class="block text-sm font-medium text-slate-300">
+            <label class="flex flex-col gap-2 text-sm font-medium text-slate-200">
               Output rails
-              <textarea id="tpl-output-rails" class="mt-1 w-full bg-slate-900 border border-slate-700 rounded px-3 py-2 h-48"></textarea>
+              <textarea
+                id="tpl-output-rails"
+                class="min-h-56 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+              ></textarea>
+              <span class="text-xs text-slate-400">Contraintes fortes sur la sortie du modèle.</span>
             </label>
           </div>
-        </div>
+        </section>
 
         <div class="flex flex-wrap gap-3">
-          <button type="submit" class="px-4 py-2 bg-emerald-500 text-emerald-950 font-semibold rounded hover:bg-emerald-400 transition">
+          <button
+            type="submit"
+            class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/80 bg-emerald-500 px-4 py-2 text-sm font-semibold text-emerald-950 shadow-sm shadow-emerald-500/20 transition hover:-translate-y-[1px] hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+          >
             Sauvegarder en RAM
           </button>
-          <button id="copy-json" type="button" class="px-4 py-2 bg-slate-800 border border-slate-700 rounded hover:bg-slate-700 transition">
+          <button
+            id="copy-json"
+            type="button"
+            class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-2 text-sm font-semibold text-slate-200 shadow-sm shadow-slate-950/30 transition hover:-translate-y-[1px] hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-600"
+          >
             Copier le JSON
           </button>
         </div>
