@@ -255,14 +255,7 @@ def build_chapter_context(
     session_id: Optional[str] = None,
     author_instruction: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Gather outline beats and a window of previous chapters to enforce continuity."""
-    # Collect outline beat for this chapter and neighbors
-    outline_beat = book.outline[chapter_index - 1] if 0 < chapter_index <= len(book.outline) else ""
-    neighbors = []
-    if chapter_index - 2 >= 0 and chapter_index - 2 < len(book.outline):
-        neighbors.append((chapter_index - 1, book.outline[chapter_index - 2]))
-    if chapter_index < len(book.outline):
-        neighbors.append((chapter_index + 1, book.outline[chapter_index]))
+    """Gather a window of previous chapters and long-term memories for continuity."""
 
     # Previous chapters (compressed)
     prev_ctx: List[str] = []
@@ -275,7 +268,6 @@ def build_chapter_context(
 
     summary_hint = SUMMARIES.get(session_id, "") if session_id else ""
     query_parts = [
-        outline_beat or "",
         author_instruction or "",
         summary_hint or "",
         " ".join(book.themes or []),
@@ -355,8 +347,6 @@ def build_chapter_context(
         facts = "\n" + "\n".join(f"- {m.text}" for m in selected_mems)
 
     return {
-        "outline_beat": outline_beat,
-        "neighbor_beats": neighbors,
         "prev_chapters": prev_ctx,
         "long_facts": facts,
         "themes": book.themes,
@@ -1082,9 +1072,8 @@ def render_system_prompt_author(ctx: ContextPackage, book: Book, chap_ctx: Dict[
 
     base = _build_common_ctx(ctx, register=None)
 
-    # Chapter context (neighbors & previous)
+    # Chapter context (previous chapters, long facts, etc.)
     prev = "\n---\n".join(chap_ctx.get("prev_chapters", []))
-    neighbor_beats = "; ".join([f"N{idx}:{beat}" for idx, beat in chap_ctx.get("neighbor_beats", [])])
 
     # Style rails (forbidden_endings + emoji_quota, merged with runtime overrides)
     output_rails = _render_output_rails_from_style(pack, ctx, end_with_statement=False)
@@ -1094,8 +1083,6 @@ def render_system_prompt_author(ctx: ContextPackage, book: Book, chap_ctx: Dict[
         "book_title": book.title,
         "themes": ", ".join(chap_ctx.get("themes", [])),
         "style": chap_ctx.get("style_pref", book.style),
-        "outline_beat": chap_ctx.get("outline_beat", ""),
-        "neighbor_beats": neighbor_beats,
         "prev_chapters": prev,
         "long_facts": chap_ctx.get("long_facts", "") or "—",
         "output_rails": output_rails,

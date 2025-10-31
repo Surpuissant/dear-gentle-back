@@ -101,7 +101,6 @@ class Book(BaseModel):
     id: str
     user_id: str
     title: str
-    outline: List[str] = []  # ordered list of beat/scene summaries
     themes: List[str] = []
     style: Optional[str] = None
     created_at: float = Field(default_factory=lambda: time.time())
@@ -135,7 +134,6 @@ class ChapterGenRequest(BaseModel):
     book_id: str
     chapter_index: int
     prompt: Optional[str] = None  # user guidance (tone, POV, constraints)
-    use_outline: bool = True
     use_prev_chapters: int = 2  # how many previous chapters to include as compressed context
     snapshot_override: Optional[Snapshot] = None
 

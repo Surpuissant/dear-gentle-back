@@ -82,8 +82,6 @@ register_style(
                 "Livre: {book_title}\n"
                 "Thèmes: {themes}\n"
                 "Style: {style}\n"
-                "Outline courant: {outline_beat}\n"
-                "Beats voisins: {neighbor_beats}\n"
                 "Contexte (compressé):\n{prev_chapters}\n"
                 "Notes d’autrice à tisser: {long_facts}\n"
                 "Cohérence discrète avec lieu/saison/heure: {space_time_hint}\n"

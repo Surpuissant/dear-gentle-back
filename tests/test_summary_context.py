@@ -113,7 +113,6 @@ def test_build_chapter_context_prioritizes_recent_and_similar(monkeypatch):
         id="book1",
         user_id="user",
         title="Roman",
-        outline=["sc1", "sc2", "sc3", "sc4", "sc5"],
         themes=["amour"],
     )
 
