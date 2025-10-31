@@ -319,10 +319,46 @@
         setStatus("Sauvegardé !", "success");
       });
 
+      async function copyToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "absolute";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+
+        const selection = document.getSelection();
+        const selected = selection?.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+
+        try {
+          document.execCommand("copy");
+        } finally {
+          document.body.removeChild(textarea);
+          if (selected) {
+            selection.removeAllRanges();
+            selection.addRange(selected);
+          }
+        }
+      }
+
       $("copy-json").addEventListener("click", async () => {
         const payload = collectForm();
-        await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-        setStatus("JSON copié dans le presse-papiers", "success");
+        const text = JSON.stringify(payload, null, 2);
+        try {
+          await copyToClipboard(text);
+          setStatus("JSON copié dans le presse-papiers", "success");
+        } catch (error) {
+          console.error("Clipboard copy failed", error);
+          setStatus("Impossible de copier le JSON", "error");
+        }
       });
 
       selectEl.addEventListener("change", (event) => {
