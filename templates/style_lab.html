@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Style Packs Lab</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  </head>
+  <body class="bg-slate-950 text-slate-100 min-h-screen">
+    <div class="max-w-6xl mx-auto py-12 px-4 lg:px-8 space-y-8">
+      <header class="space-y-2">
+        <h1 class="text-3xl font-semibold tracking-tight">Style Packs Lab</h1>
+        <p class="text-slate-300 max-w-3xl">
+          Modifie les personas directement en RAM. Toute sauvegarde est immédiate mais non
+          persistante.
+        </p>
+      </header>
+
+      <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-5 shadow-lg shadow-slate-950/40 space-y-4">
+        <div class="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div class="space-y-1">
+            <label class="text-xs font-semibold uppercase tracking-[0.2em] text-slate-400" for="style-select">
+              Style en cours d'édition
+            </label>
+            <select
+              id="style-select"
+              class="w-full md:w-80 bg-slate-950/70 border border-slate-700/80 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70 focus:border-emerald-400/70 transition"
+            ></select>
+          </div>
+          <button
+            id="new-style"
+            title="Vider le formulaire pour créer un nouveau style"
+            class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/80 bg-emerald-500 text-emerald-950 px-3 py-2 text-sm font-semibold shadow-sm shadow-emerald-500/20 transition hover:-translate-y-[1px] hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+          >
+            Nouveau style
+          </button>
+        </div>
+        <p class="text-xs text-slate-400">
+          Choisis un style existant ou clique sur «&nbsp;Nouveau style&nbsp;» pour repartir d'une page blanche. Renseigne
+          ensuite un identifiant unique puis sauvegarde pour l'ajouter à la liste.
+        </p>
+        <p id="status" class="text-sm text-slate-400 min-h-[1.25rem]"></p>
+      </section>
+
+      <form id="style-form" class="space-y-10">
+        <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-6 shadow-lg shadow-slate-950/30">
+          <div class="flex items-center justify-between gap-4">
+            <h2 class="text-xl font-semibold tracking-tight">Métadonnées</h2>
+            <p class="text-xs text-slate-400">
+              Identité, présentation et versionnage du style pack.
+            </p>
+          </div>
+          <div class="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+            <div class="space-y-5">
+              <div class="grid gap-4 md:grid-cols-2">
+                <label class="block text-sm font-medium text-slate-200">
+                  Identifiant unique
+                  <input
+                    id="meta-id"
+                    class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                    placeholder="henry"
+                  />
+                  <span class="mt-1 block text-xs text-slate-400">Utilisé pour appeler le style via l'API.</span>
+                </label>
+                <label class="block text-sm font-medium text-slate-200">
+                  Nom marketing
+                  <input
+                    id="meta-name"
+                    class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  />
+                  <span class="mt-1 block text-xs text-slate-400">Affiché dans les interfaces.</span>
+                </label>
+              </div>
+              <label class="block text-sm font-medium text-slate-200">
+                Description
+                <textarea
+                  id="meta-description"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  rows="4"
+                ></textarea>
+              </label>
+            </div>
+            <div class="space-y-5">
+              <label class="block text-sm font-medium text-slate-200">
+                Avatar (URL)
+                <input
+                  id="meta-avatar"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  placeholder="https://cdn..."
+                />
+              </label>
+              <label class="block text-sm font-medium text-slate-200">
+                Version
+                <input
+                  id="meta-version"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  placeholder="1.0.0"
+                />
+                <span class="mt-1 block text-xs text-slate-400">Aidez-vous du SemVer pour suivre les évolutions.</span>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-6 shadow-lg shadow-slate-950/30">
+          <div class="flex items-center justify-between gap-4">
+            <h2 class="text-xl font-semibold tracking-tight">Contraintes &amp; situation</h2>
+            <p class="text-xs text-slate-400">
+              Paramètres qui guident la tonalité et l'accroche initiale.
+            </p>
+          </div>
+          <div class="grid gap-6 lg:grid-cols-2">
+            <div class="space-y-5">
+              <label class="block text-sm font-medium text-slate-200">
+                Quota d'emoji maximum
+                <input
+                  id="constraints-emoji"
+                  type="number"
+                  min="0"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                />
+                <span class="mt-1 block text-xs text-slate-400">Contrôle la dose d'expressivité.</span>
+              </label>
+              <label class="block text-sm font-medium text-slate-200">
+                Fins interdites
+                <input
+                  id="constraints-endings"
+                  class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                  placeholder="bisous, bisous !"
+                />
+                <span class="mt-1 block text-xs text-slate-400">Séparez les entrées par des virgules.</span>
+              </label>
+            </div>
+            <label class="block text-sm font-medium text-slate-200">
+              Situation initiale
+              <textarea
+                id="initial-situation"
+                class="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+                rows="8"
+              ></textarea>
+              <span class="mt-1 block text-xs text-slate-400">Décrivez la scène de départ qui inspire le ton.</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="bg-slate-900/70 border border-slate-800 rounded-xl p-6 space-y-6 shadow-lg shadow-slate-950/30">
+          <div class="flex items-center justify-between gap-4">
+            <h2 class="text-xl font-semibold tracking-tight">Templates</h2>
+            <p class="text-xs text-slate-400">Prompts longs, optimisés pour le LLM.</p>
+          </div>
+          <div class="grid gap-6 lg:grid-cols-2">
+            <label class="flex flex-col gap-2 text-sm font-medium text-slate-200">
+              Conversation courte
+              <textarea
+                id="tpl-conversation-brevity"
+                class="min-h-56 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+              ></textarea>
+              <span class="text-xs text-slate-400">Utilisé pour des réponses rapides.</span>
+            </label>
+            <label class="flex flex-col gap-2 text-sm font-medium text-slate-200">
+              Conversation scène
+              <textarea
+                id="tpl-conversation-scene"
+                class="min-h-56 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+              ></textarea>
+              <span class="text-xs text-slate-400">Narration détaillée de la scène.</span>
+            </label>
+            <label class="flex flex-col gap-2 text-sm font-medium text-slate-200">
+              Auteur
+              <textarea
+                id="tpl-author"
+                class="min-h-56 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+              ></textarea>
+              <span class="text-xs text-slate-400">Signature rédactionnelle du personnage.</span>
+            </label>
+            <label class="flex flex-col gap-2 text-sm font-medium text-slate-200">
+              Output rails
+              <textarea
+                id="tpl-output-rails"
+                class="min-h-56 w-full rounded-xl border border-slate-700 bg-slate-950/70 px-3 py-3 text-sm leading-relaxed font-mono focus:outline-none focus:ring-2 focus:ring-emerald-400/70"
+              ></textarea>
+              <span class="text-xs text-slate-400">Contraintes fortes sur la sortie du modèle.</span>
+            </label>
+          </div>
+        </section>
+
+        <div class="flex flex-wrap gap-3">
+          <button
+            type="submit"
+            class="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/80 bg-emerald-500 px-4 py-2 text-sm font-semibold text-emerald-950 shadow-sm shadow-emerald-500/20 transition hover:-translate-y-[1px] hover:bg-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-300"
+          >
+            Sauvegarder en RAM
+          </button>
+          <button
+            id="copy-json"
+            type="button"
+            class="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-2 text-sm font-semibold text-slate-200 shadow-sm shadow-slate-950/30 transition hover:-translate-y-[1px] hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-slate-600"
+          >
+            Copier le JSON
+          </button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $("status");
+      const selectEl = $("style-select");
+      const metaIdInput = $("meta-id");
+      let stylesCache = [];
+
+      function setStatus(msg, tone = "info") {
+        const tones = {
+          info: "text-slate-400",
+          success: "text-emerald-400",
+          error: "text-rose-400",
+        };
+        statusEl.textContent = msg || "";
+        statusEl.className = `text-sm ${tones[tone] || tones.info}`;
+      }
+
+      function parseForbidden(str) {
+        if (!str.trim()) return [];
+        return str
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+
+      function stringifyForbidden(values) {
+        return (values || []).join(", ");
+      }
+
+      function hydrateForm(pack) {
+        $("meta-id").value = pack.meta?.id || "";
+        $("meta-name").value = pack.meta?.name || "";
+        $("meta-description").value = pack.meta?.description || "";
+        $("meta-avatar").value = pack.meta?.avatar_url || "";
+        $("meta-version").value = pack.meta?.version || "";
+        $("constraints-emoji").value = pack.constraints?.emoji_quota ?? 1;
+        $("constraints-endings").value = stringifyForbidden(pack.constraints?.forbidden_endings);
+        $("initial-situation").value = pack.initial_situation || "";
+        $("tpl-conversation-brevity").value = pack.templates?.conversation_brevity || "";
+        $("tpl-conversation-scene").value = pack.templates?.conversation_scene || "";
+        $("tpl-author").value = pack.templates?.author || "";
+        $("tpl-output-rails").value = pack.templates?.output_rails || "";
+      }
+
+      function collectForm() {
+        return {
+          meta: {
+            id: $("meta-id").value.trim(),
+            name: $("meta-name").value.trim(),
+            description: $("meta-description").value.trim(),
+            avatar_url: $("meta-avatar").value.trim() || null,
+            version: $("meta-version").value.trim() || "1.0.0",
+          },
+          constraints: {
+            emoji_quota: Number($("constraints-emoji").value || 0),
+            forbidden_endings: parseForbidden($("constraints-endings").value || ""),
+          },
+          templates: {
+            conversation_brevity: $("tpl-conversation-brevity").value,
+            conversation_scene: $("tpl-conversation-scene").value,
+            author: $("tpl-author").value,
+            output_rails: $("tpl-output-rails").value,
+          },
+          initial_situation: $("initial-situation").value || null,
+        };
+      }
+
+      async function loadStyles(selectedId) {
+        const res = await fetch("/api/styles");
+        const data = await res.json();
+        stylesCache = data.items || [];
+        selectEl.innerHTML = "";
+        const placeholder = document.createElement("option");
+        placeholder.textContent = "Choisir un style";
+        placeholder.value = "";
+        selectEl.appendChild(placeholder);
+        stylesCache.forEach((meta) => {
+          const option = document.createElement("option");
+          option.value = meta.id;
+          option.textContent = `${meta.name} (${meta.id})`;
+          if (meta.id === selectedId) option.selected = true;
+          selectEl.appendChild(option);
+        });
+      }
+
+      async function loadStyleDetails(styleId) {
+        if (!styleId) {
+          hydrateForm({ meta: {}, constraints: {}, templates: {} });
+          return;
+        }
+        setStatus("Chargement…");
+        const res = await fetch(`/api/styles/${encodeURIComponent(styleId)}/raw`);
+        if (!res.ok) {
+          setStatus("Impossible de charger ce style", "error");
+          return;
+        }
+        const data = await res.json();
+        hydrateForm(data.item || {});
+        setStatus("Style chargé", "success");
+      }
+
+      $("style-form").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const payload = collectForm();
+        if (!payload.meta.id) {
+          setStatus("L'identifiant du style est obligatoire", "error");
+          return;
+        }
+        setStatus("Sauvegarde…");
+        const res = await fetch(`/api/styles/${encodeURIComponent(payload.meta.id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const error = await res.json().catch(() => ({}));
+          setStatus(error.detail || "Erreur pendant la sauvegarde", "error");
+          return;
+        }
+        await loadStyles(payload.meta.id);
+        setStatus("Sauvegardé !", "success");
+      });
+
+      async function copyToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "absolute";
+        textarea.style.left = "-9999px";
+        document.body.appendChild(textarea);
+
+        const selection = document.getSelection();
+        const selected = selection?.rangeCount > 0 ? selection.getRangeAt(0) : null;
+
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+
+        try {
+          document.execCommand("copy");
+        } finally {
+          document.body.removeChild(textarea);
+          if (selected) {
+            selection.removeAllRanges();
+            selection.addRange(selected);
+          }
+        }
+      }
+
+      $("copy-json").addEventListener("click", async () => {
+        const payload = collectForm();
+        const text = JSON.stringify(payload, null, 2);
+        try {
+          await copyToClipboard(text);
+          setStatus("JSON copié dans le presse-papiers", "success");
+        } catch (error) {
+          console.error("Clipboard copy failed", error);
+          setStatus("Impossible de copier le JSON", "error");
+        }
+      });
+
+      selectEl.addEventListener("change", (event) => {
+        loadStyleDetails(event.target.value);
+      });
+
+      $("new-style").addEventListener("click", (event) => {
+        event.preventDefault();
+        selectEl.selectedIndex = 0;
+        const blank = { meta: {}, constraints: { emoji_quota: 1, forbidden_endings: [] }, templates: {} };
+        hydrateForm(blank);
+        metaIdInput.focus();
+        setStatus(
+          "Formulaire vierge. Renseigne un identifiant unique puis clique sur «\u00a0Sauvegarder en RAM\u00a0» pour créer le style.",
+          "info",
+        );
+      });
+
+      loadStyles();
+      hydrateForm({ meta: {}, constraints: { emoji_quota: 1, forbidden_endings: [] }, templates: {} });
+    </script>
+  </body>
+</html>
